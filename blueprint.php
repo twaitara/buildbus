@@ -6,15 +6,20 @@
  */
 session_start();
 
-// ---- users (override via secret.php) ----
+// ---- users + timezone (override via secret.php) ----
 $users = [
     ['user' => 'tito', 'pass' => 'CHANGE_ME_DEV', 'name' => 'Tito (developer)', 'role' => 'admin'],
     ['user' => 'ann',  'pass' => 'CHANGE_ME_ANN', 'name' => 'Ann',             'role' => 'editor'],
 ];
+$timezone = 'Africa/Nairobi'; // East Africa Time (UTC+3); override with 'timezone' in secret.php
 if (is_file(__DIR__ . '/secret.php')) {
     $s = require __DIR__ . '/secret.php';
-    if (is_array($s) && !empty($s['users']) && is_array($s['users'])) $users = $s['users'];
+    if (is_array($s)) {
+        if (!empty($s['users']) && is_array($s['users'])) $users = $s['users'];
+        if (!empty($s['timezone'])) $timezone = $s['timezone'];
+    }
 }
+date_default_timezone_set($timezone);
 
 $DATA_DIR  = __DIR__ . '/data';
 $DATA_FILE = $DATA_DIR . '/blueprint_input.json';

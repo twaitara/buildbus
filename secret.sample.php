@@ -9,6 +9,8 @@
  * on each save. 'role' => 'admin' can view the activity logs; 'editor' cannot.
  */
 return [
+    // Timezone for all logged times (default Africa/Nairobi, UTC+3). Optional.
+    'timezone' => 'Africa/Nairobi',
     'users' => [
         ['user' => 'tito', 'pass' => 'set-a-strong-password', 'name' => 'Tito (developer)', 'role' => 'admin'],
         ['user' => 'ann',  'pass' => 'set-a-strong-password', 'name' => 'Ann',              'role' => 'editor'],
