@@ -20,6 +20,7 @@ $DATA_DIR  = __DIR__ . '/data';
 $DATA_FILE = $DATA_DIR . '/blueprint_input.json';
 $HIST_FILE = $DATA_DIR . '/blueprint_history.jsonl';
 $ACT_FILE  = $DATA_DIR . '/activity.jsonl';
+$CHG_FILE  = $DATA_DIR . '/changes.jsonl';
 
 /** Append one JSON line to a log file. */
 function bp_log($file, array $entry) {
@@ -28,6 +29,57 @@ function bp_log($file, array $entry) {
     @file_put_contents($file, json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND);
 }
 function bp_ip() { return $_SERVER['REMOTE_ADDR'] ?? ''; }
+
+/** Friendly label for a field key. */
+function bp_field_label($k) {
+    static $m = [
+        'client_name' => 'Business / shop name', 'reviewer' => 'Reviewer name & role',
+        'missed' => 'Extra notes', 'signoff_v' => 'Overall sign-off', 'signoff_date' => 'Sign-off date',
+        'ph1_v' => 'Step 1 · Sales & order', 'ph1_note' => 'Step 1 note',
+        'ph2_v' => 'Step 2 · Job card & start', 'ph2_note' => 'Step 2 note',
+        'ph3_v' => 'Step 3 · Procurement', 'ph3_note' => 'Step 3 note',
+        'ph4_v' => 'Step 4 · Production floor', 'ph4_note' => 'Step 4 note',
+        'ph5_v' => 'Step 5 · Quality gates', 'ph5_note' => 'Step 5 note',
+        'ph6_v' => 'Step 6 · Delivery & finance', 'ph6_note' => 'Step 6 note',
+        'd1_v' => 'Decision · job card on invoice', 'd1_note' => 'Decision 1 note',
+        'd2_v' => 'Decision · enforced QC gates', 'd2_note' => 'Decision 2 note',
+        'd3_v' => 'Decision · Zoho v1 scope', 'd3_note' => 'Decision 3 note',
+        'd4_v' => 'Decision · bus + truck', 'd4_note' => 'Decision 4 note',
+    ];
+    return $m[$k] ?? $k;
+}
+function bp_verdict($v) { return $v === 'approve' ? 'Looks right / Agree' : ($v === 'change' ? 'Needs a change' : ($v === '' ? '(blank)' : $v)); }
+
+/** Build a human-readable list of changes between two saved blueprint states. */
+function bp_changes($old, $new) {
+    $old = is_array($old) ? $old : []; $new = is_array($new) ? $new : [];
+    $out = [];
+    $of = $old['fields'] ?? []; $nf = $new['fields'] ?? [];
+    foreach (array_keys($nf + $of) as $k) {
+        $ov = (string)($of[$k] ?? ''); $nv = (string)($nf[$k] ?? '');
+        if ($ov === $nv) continue;
+        $label = bp_field_label($k);
+        if (substr($k, -2) === '_v') $out[] = "$label — " . bp_verdict($ov) . " → " . bp_verdict($nv);
+        elseif ($ov === '')         $out[] = "$label — filled in";
+        elseif ($nv === '')         $out[] = "$label — cleared";
+        else                        $out[] = "$label — edited";
+    }
+    foreach (['busStages' => 'Bus', 'truckStages' => 'Truck'] as $key => $lbl) {
+        $os = $old[$key] ?? []; $ns = $new[$key] ?? [];
+        $n = max(count($os), count($ns));
+        for ($i = 0; $i < $n; $i++) {
+            $o = $os[$i] ?? null; $z = $ns[$i] ?? null;
+            if ($o === null && $z !== null) { $out[] = "$lbl section added: " . ($z['name'] ?: '(unnamed)'); continue; }
+            if ($z === null && $o !== null) { $out[] = "$lbl section removed: " . ($o['name'] ?: '(unnamed)'); continue; }
+            if ($o && $z) {
+                if (($o['name'] ?? '') !== ($z['name'] ?? '')) $out[] = "$lbl section " . ($i + 1) . " renamed: '" . ($o['name'] ?? '') . "' → '" . ($z['name'] ?? '') . "'";
+                if (!!($o['qc'] ?? false) !== !!($z['qc'] ?? false)) $out[] = "$lbl section '" . ($z['name'] ?? '') . "' QC gate " . (($z['qc'] ?? false) ? 'turned ON' : 'turned OFF');
+                if (($o['notes'] ?? '') !== ($z['notes'] ?? '')) $out[] = "$lbl section '" . ($z['name'] ?? '') . "' description edited";
+            }
+        }
+    }
+    return $out;
+}
 
 if (empty($_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(16));
 $csrf   = $_SESSION['csrf'];
@@ -76,11 +128,18 @@ if ($action === 'save') {
         http_response_code(400); echo json_encode(['ok' => false, 'error' => 'Session expired — reload the page.']); exit;
     }
     if (!is_dir($DATA_DIR)) @mkdir($DATA_DIR, 0775, true);
-    $record = ['saved_at' => date('c'), 'by' => ($_SESSION['bp_name'] ?? 'unknown'), 'data' => $body['data'] ?? []];
+    $prev = null;
+    if (is_file($DATA_FILE)) { $pj = json_decode(file_get_contents($DATA_FILE), true); if (is_array($pj)) $prev = $pj['data'] ?? null; }
+    $newData = $body['data'] ?? [];
+    $changes = bp_changes($prev, $newData);
+    $record = ['saved_at' => date('c'), 'by' => ($_SESSION['bp_name'] ?? 'unknown'), 'data' => $newData];
     file_put_contents($DATA_FILE, json_encode($record, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
     file_put_contents($HIST_FILE, json_encode($record, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND);
-    bp_log($ACT_FILE, ['at' => date('c'), 'user' => $_SESSION['bp_user'] ?? '', 'name' => $_SESSION['bp_name'] ?? '', 'action' => 'save', 'ip' => bp_ip()]);
-    echo json_encode(['ok' => true, 'saved_at' => $record['saved_at']]);
+    if ($prev === null || $changes) {
+        bp_log($CHG_FILE, ['at' => date('c'), 'by' => ($_SESSION['bp_name'] ?? 'unknown'), 'user' => $_SESSION['bp_user'] ?? '', 'first' => ($prev === null), 'changes' => $changes]);
+    }
+    bp_log($ACT_FILE, ['at' => date('c'), 'user' => $_SESSION['bp_user'] ?? '', 'name' => $_SESSION['bp_name'] ?? '', 'action' => 'save', 'ip' => bp_ip(), 'count' => count($changes)]);
+    echo json_encode(['ok' => true, 'saved_at' => $record['saved_at'], 'changes' => count($changes)]);
     exit;
 }
 
@@ -99,6 +158,12 @@ if ($action === 'logs') {
     if (is_file($HIST_FILE)) {
         foreach (array_reverse(array_filter(explode("\n", file_get_contents($HIST_FILE)))) as $ln) {
             $e = json_decode($ln, true); if (is_array($e)) $saves[] = $e;
+        }
+    }
+    $changesLog = [];
+    if (is_file($CHG_FILE)) {
+        foreach (array_reverse(array_filter(explode("\n", file_get_contents($CHG_FILE)))) as $ln) {
+            $e = json_decode($ln, true); if (is_array($e)) $changesLog[] = $e;
         }
     }
     $actIcon = ['login' => '🔓', 'logout' => '🔒', 'save' => '💾', 'login-failed' => '⛔'];
@@ -123,9 +188,35 @@ if ($action === 'logs') {
       .empty{text-align:center;color:#5b6b80;padding:24px}
       details{margin:6px 0;border:1px solid #eef2f8;border-radius:10px;padding:8px 12px}
       summary{cursor:pointer;font-weight:500;font-size:14px} pre{background:#f7f9fc;border-radius:8px;padding:12px;overflow:auto;font-size:12px;margin:10px 0 0}
+      .tl{position:relative;margin:6px 0 0;padding-left:26px}
+      .tl::before{content:"";position:absolute;left:8px;top:6px;bottom:6px;width:2px;background:#dfe6f0}
+      .ev{position:relative;padding:10px 0 14px}
+      .ev::before{content:"";position:absolute;left:-22px;top:14px;width:12px;height:12px;border-radius:50%;background:#1f6feb;border:2px solid #fff;box-shadow:0 0 0 2px #b5d4f4}
+      .ev.first::before{background:#0f9d58;box-shadow:0 0 0 2px #c0dd97}
+      .ev .head{font-size:14px;font-weight:600} .ev .sub{font-size:12px;color:#5b6b80;margin-bottom:6px}
+      .chg{font-size:13px;color:#34465c;padding:4px 0 4px 16px;position:relative}
+      .chg::before{content:"›";position:absolute;left:2px;color:#1f6feb;font-weight:700}
+      .who{display:inline-block;font-size:12px;font-weight:600;background:#e9f1ff;color:#13427e;border-radius:20px;padding:1px 9px}
     </style></head><body>
     <div class="top"><div class="wrap"><h1>Activity logs</h1><a href="blueprint.php">← Back to blueprint</a></div></div>
     <div class="wrap">
+      <div class="card">
+        <h2>Change map (<?= count($changesLog) ?> updates)</h2>
+        <p class="muted">A running map of every change to the blueprint, newest first — who changed what, and when.</p>
+        <?php if (!$changesLog): ?><div class="empty">No changes yet — the map fills in as the blueprint is edited and saved.</div><?php else: ?>
+        <div class="tl">
+          <?php foreach ($changesLog as $c): ?>
+            <div class="ev<?= !empty($c['first']) ? ' first' : '' ?>">
+              <div class="head"><span class="who"><?= h($c['by'] ?? 'unknown') ?></span> &nbsp;<?= !empty($c['first']) ? 'created the first version' : (count($c['changes'] ?? []) . ' change' . (count($c['changes'] ?? []) === 1 ? '' : 's')) ?></div>
+              <div class="sub"><?= when($c['at'] ?? '') ?></div>
+              <?php foreach (($c['changes'] ?? []) as $line): ?>
+                <div class="chg"><?= h($line) ?></div>
+              <?php endforeach; ?>
+            </div>
+          <?php endforeach; ?>
+        </div>
+        <?php endif; ?>
+      </div>
       <div class="card">
         <h2>Activity (<?= count($activity) ?>)</h2>
         <p class="muted">Every sign-in, sign-out, save and failed login — newest first.</p>
@@ -328,6 +419,25 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
   .foot{text-align:center;font-size:12px;color:#8a97a8;margin-top:16px}
   .err{background:#fbeaea;color:#b3261e;border-radius:10px;padding:9px 12px;font-size:13px;font-weight:500;margin-bottom:6px}
   @media(prefers-reduced-motion:reduce){.authpage,.blob,.logo,.fill,.dot,.bigbtn,.bigbtn::after,.authcard{animation:none}.fill{right:0}}
+  /* ---- guided review UX ---- */
+  .pstrip{position:sticky;top:0;z-index:15;background:rgba(255,255,255,.94);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  .pstrip-inner{max-width:880px;margin:0 auto;display:flex;align-items:center;gap:14px;padding:11px 18px}
+  .pcount{font-size:13px;font-weight:600;color:#34465c;white-space:nowrap;min-width:104px}
+  .ptrack{flex:1;height:9px;border-radius:6px;background:#eef2f8;overflow:hidden}
+  .pfill{height:100%;width:0;border-radius:6px;background:linear-gradient(90deg,#1f6feb,#0f9d76);transition:width .55s cubic-bezier(.2,.8,.2,1)}
+  .pfill.done{background:linear-gradient(90deg,#0f9d58,#0f9d76)}
+  .pnext{border:1px solid var(--accent);background:#fff;color:var(--accent-d);font:inherit;font-weight:600;font-size:13px;border-radius:9px;padding:8px 13px;cursor:pointer;white-space:nowrap;transition:.15s}
+  .pnext:hover{background:#eef5ff} .pnext:disabled{opacity:.55;cursor:default;border-color:var(--line);color:var(--muted)}
+  .welcome{background:#e6f7f1;border:1px solid #b6e6d5;color:#0c7a5c;border-radius:12px;padding:11px 15px;font-size:14px;font-weight:500;margin:18px 0 0}
+  .helper{background:#eef5ff;border:1px solid #cfe0fb;border-radius:14px;padding:16px 18px;margin:16px 0 6px}
+  .helper h3{margin:0 0 8px;font-size:15px;color:#13427e;font-weight:600}
+  .helper ol{margin:0;padding-left:20px;color:#34465c;font-size:14px} .helper li{margin:4px 0}
+  .ritag{display:inline-flex;align-items:center;font-size:12px;font-weight:600;border-radius:20px;padding:3px 11px;margin-bottom:10px}
+  .ritag.todo{background:#fef3e2;color:#9a5e08} .ritag.done{background:#e6f7f1;color:#0c7a5c}
+  .card.attention{box-shadow:0 0 0 2px #f0b35a, var(--shadow);transition:box-shadow .25s}
+  .celebrate{display:none;background:linear-gradient(135deg,#0f9d58,#0f9d76);color:#fff;border-radius:14px;padding:16px 18px;margin:18px 0;font-size:15px;font-weight:500}
+  .celebrate.show{display:block;animation:rise .5s both}
+  .celebrate b{font-weight:700}
 </style>
 </head>
 <body>
@@ -389,7 +499,27 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
     </div>
   </div>
 
+  <div class="pstrip">
+    <div class="pstrip-inner">
+      <span class="pcount" id="pcount">0 of 0 reviewed</span>
+      <div class="ptrack"><div class="pfill" id="pfill"></div></div>
+      <button class="pnext" id="pnext" type="button">Jump to next →</button>
+    </div>
+  </div>
+
   <div class="wrap">
+
+    <div class="welcome" id="welcome" style="display:none"></div>
+
+    <div class="helper">
+      <h3>How this works — about 10 minutes</h3>
+      <ol>
+        <li>Read each step of the proposed system below.</li>
+        <li>Tap <b>Looks right</b> or <b>Needs a change</b> — add a note if you'd like something different.</li>
+        <li>Correct the bus &amp; truck section names so they match your real workshop.</li>
+        <li>Press <b>Save</b> at the bottom. Your progress is kept — you can come back and edit anytime.</li>
+      </ol>
+    </div>
 
     <div class="card">
       <h2>Your details</h2>
@@ -409,7 +539,7 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
           <div class="pbody">
             <div class="ptitle"><?= h($p['title']) ?><span class="ptag"><?= h($p['sys']) ?></span></div>
             <div class="pdesc"><?= $p['body'] ?></div>
-            <div class="fb">
+            <div class="fb review-item" data-group="ph<?= $p['n'] ?>_v">
               <div class="seg" data-seg>
                 <label class="approve"><input type="radio" name="ph<?= $p['n'] ?>_v" value="approve">Looks right</label>
                 <label class="change"><input type="radio" name="ph<?= $p['n'] ?>_v" value="change">Needs a change</label>
@@ -444,7 +574,7 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
     <div class="card">
       <p class="lead">These are the choices that shape how the system behaves. Tell us if any should be different.</p>
       <?php foreach ($decisions as $d): ?>
-        <div class="drow">
+        <div class="drow review-item" data-group="<?= $d['k'] ?>_v">
           <div class="dtitle"><?= h($d['title']) ?></div>
           <div class="seg" data-seg>
             <label class="approve"><input type="radio" name="<?= $d['k'] ?>_v" value="approve">Agree</label>
@@ -462,7 +592,7 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
       <p class="lead">Anything about your process that isn't captured above — special steps, who signs off, paperwork, customer types, anything at all.</p>
       <textarea name="missed" style="min-height:120px" placeholder="Type freely…"></textarea>
       <div class="grid2" style="margin-top:14px">
-        <div>
+        <div class="review-item" data-group="signoff_v">
           <label class="fld">Overall, is this blueprint ready to build?</label>
           <div class="seg" data-seg>
             <label class="approve"><input type="radio" name="signoff_v" value="approve">Approved — build it</label>
@@ -472,6 +602,8 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
         <div><label class="fld">Date</label><input type="text" name="signoff_date" placeholder="e.g. 30 June 2026"></div>
       </div>
     </div>
+
+    <div class="celebrate" id="celebrate">🎉 <b>All reviewed — nicely done!</b> Press <b>Save my changes</b> to send it to the developer. You can still come back and edit anything later.</div>
 
   </div>
 
@@ -539,9 +671,9 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
     }
     document.querySelectorAll('[data-seg] input').forEach(i=> i.addEventListener('change', paintSegs));
 
-    // ---- hydrate from saved ----
-    function hydrate(){
-      const f = (SAVED && SAVED.fields) || {};
+    // ---- hydrate from a data object ----
+    function hydrateFrom(data){
+      const f = (data && data.fields) || {};
       Object.keys(f).forEach(name=>{
         document.querySelectorAll('[name="'+(window.CSS&&CSS.escape?CSS.escape(name):name)+'"]').forEach(el=>{
           if(el.type==='radio'){ el.checked = (el.value===f[name]); }
@@ -549,12 +681,12 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
           else el.value = f[name];
         });
       });
-      fillList('busList', (SAVED && SAVED.busStages && SAVED.busStages.length) ? SAVED.busStages : DEFAULTS.bus);
-      fillList('truckList', (SAVED && SAVED.truckStages && SAVED.truckStages.length) ? SAVED.truckStages : DEFAULTS.truck);
+      fillList('busList', (data && data.busStages && data.busStages.length) ? data.busStages : DEFAULTS.bus);
+      fillList('truckList', (data && data.truckStages && data.truckStages.length) ? data.truckStages : DEFAULTS.truck);
       paintSegs();
     }
 
-    // ---- collect + save ----
+    // ---- collect ----
     function collectFields(){
       const f = {};
       document.querySelectorAll('input[name], textarea[name]').forEach(el=>{
@@ -564,30 +696,80 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
       });
       return f;
     }
+    function snapshot(){ return { fields: collectFields(), busStages: collectStages('busList'), truckStages: collectStages('truckList') }; }
+
     function toast(msg, err){
       const t = document.getElementById('toast');
       t.textContent = msg; t.classList.toggle('err', !!err); t.classList.add('show');
-      setTimeout(()=> t.classList.remove('show'), 2600);
+      setTimeout(()=> t.classList.remove('show'), 2800);
     }
+
+    // ---- guided progress ----
+    const reviewItems = [];
+    function setupReview(){
+      document.querySelectorAll('.review-item').forEach(item=>{
+        const seg = item.querySelector('.seg'); if(!seg) return;
+        const tag = document.createElement('div'); tag.className = 'ritag';
+        seg.parentNode.insertBefore(tag, seg);
+        item._tag = tag; reviewItems.push(item);
+      });
+    }
+    function answered(item){ return !!document.querySelector('input[name="'+item.getAttribute('data-group')+'"]:checked'); }
+    function updateProgress(){
+      let done = 0;
+      reviewItems.forEach(item=>{
+        if(answered(item)){ done++; item._tag.className='ritag done'; item._tag.textContent='✓ Answered'; const c=item.closest('.card'); if(c) c.classList.remove('attention'); }
+        else { item._tag.className='ritag todo'; item._tag.textContent='• Needs your input'; }
+      });
+      const total = reviewItems.length, pct = total ? Math.round(done/total*100) : 0;
+      const fill = document.getElementById('pfill'); fill.style.width = pct+'%'; fill.classList.toggle('done', total>0 && done===total);
+      document.getElementById('pcount').textContent = done+' of '+total+' reviewed';
+      const next = document.getElementById('pnext'), cele = document.getElementById('celebrate');
+      if(total>0 && done===total){ next.disabled=true; next.textContent='All reviewed 🎉'; cele.classList.add('show'); }
+      else { next.disabled=false; next.textContent='Jump to next →'; cele.classList.remove('show'); }
+    }
+    document.getElementById('pnext').onclick = ()=>{
+      const item = reviewItems.find(it=> !answered(it)); if(!item) return;
+      const card = item.closest('.card') || item;
+      card.scrollIntoView({behavior:'smooth', block:'center'}); card.classList.add('attention');
+    };
+
+    // ---- dirty tracking + on-device draft ----
+    const LSKEY = 'bp_draft_v1'; let dirty = false, saving = false;
+    function setStatus(html, color){ const s=document.getElementById('status'); s.innerHTML=html; s.style.color=color||''; }
+    function markDirty(){ dirty=true; setStatus('● Unsaved changes — press Save', '#9a5e08'); try{ localStorage.setItem(LSKEY, JSON.stringify(snapshot())); }catch(e){} }
+    window.addEventListener('beforeunload', e=>{ if(dirty && !saving){ e.preventDefault(); e.returnValue=''; } });
+    document.addEventListener('input', ()=>{ markDirty(); updateProgress(); });
+    document.addEventListener('change', ()=>{ paintSegs(); markDirty(); updateProgress(); });
+
+    // ---- save ----
     const btn = document.getElementById('saveBtn');
     btn.onclick = async ()=>{
-      btn.disabled = true; const old = btn.textContent; btn.textContent = 'Saving…';
-      const data = { fields: collectFields(), busStages: collectStages('busList'), truckStages: collectStages('truckList') };
+      saving=true; btn.disabled=true; const old=btn.textContent; btn.textContent='Saving…';
       try{
         const res = await fetch('blueprint.php?action=save', {
           method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({csrf:CSRF, data})
+          body: JSON.stringify({csrf:CSRF, data: snapshot()})
         });
         const j = await res.json();
         if(j.ok){
-          toast('Saved — thank you. The developer can now see your notes.');
-          document.getElementById('status').textContent = 'Last saved just now';
+          dirty=false; try{ localStorage.removeItem(LSKEY); }catch(e){}
+          toast('Saved — thank you! The developer can now see your input.');
+          setStatus('✓ All changes saved', '#0c7a5c');
         } else { toast(j.error || 'Could not save.', true); }
       }catch(e){ toast('Network error — please try again.', true); }
-      btn.disabled = false; btn.textContent = old;
+      saving=false; btn.disabled=false; btn.textContent=old;
     };
 
-    hydrate();
+    // ---- init ----
+    let initial = SAVED, restored = false;
+    if(!initial){ try{ const d=localStorage.getItem(LSKEY); if(d){ initial=JSON.parse(d); restored=true; } }catch(e){} }
+    hydrateFrom(initial);
+    setupReview();
+    updateProgress();
+    const wel = document.getElementById('welcome');
+    if(SAVED){ wel.textContent='Welcome back — your saved answers are loaded. Edit anything and press Save again.'; wel.style.display='block'; }
+    else if(restored){ wel.textContent='We restored your unsaved draft from this device. Review it and Save when ready.'; wel.style.display='block'; }
   </script>
 
 <?php endif; ?>
