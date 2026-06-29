@@ -451,6 +451,9 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
   .helper ol{margin:0;padding-left:20px;color:#34465c;font-size:14px} .helper li{margin:4px 0}
   .ritag{display:inline-flex;align-items:center;font-size:12px;font-weight:600;border-radius:20px;padding:3px 11px;margin-bottom:10px}
   .ritag.todo{background:#fef3e2;color:#9a5e08} .ritag.done{background:#e6f7f1;color:#0c7a5c}
+  .seg{vertical-align:middle}
+  .resetbtn{margin-left:10px;vertical-align:middle;border:1px solid var(--line);background:#fff;color:var(--muted);font:inherit;font-size:12px;font-weight:600;border-radius:9px;padding:7px 12px;cursor:pointer;transition:.15s}
+  .resetbtn:hover{border-color:#f0b35a;color:#9a5e08;background:#fff8ee}
   .card.attention{box-shadow:0 0 0 2px #f0b35a, var(--shadow);transition:box-shadow .25s}
   .celebrate{display:none;background:linear-gradient(135deg,#0f9d58,#0f9d76);color:#fff;border-radius:14px;padding:16px 18px;margin:18px 0;font-size:15px;font-weight:500}
   .celebrate.show{display:block;animation:rise .5s both}
@@ -724,15 +727,22 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
         const seg = item.querySelector('.seg'); if(!seg) return;
         const tag = document.createElement('div'); tag.className = 'ritag';
         seg.parentNode.insertBefore(tag, seg);
-        item._tag = tag; reviewItems.push(item);
+        const reset = document.createElement('button');
+        reset.type = 'button'; reset.className = 'resetbtn'; reset.textContent = '↺ Reset';
+        reset.onclick = ()=>{
+          document.querySelectorAll('input[name="'+item.getAttribute('data-group')+'"]').forEach(r=> r.checked=false);
+          paintSegs(); markDirty(); updateProgress();
+        };
+        seg.insertAdjacentElement('afterend', reset);
+        item._tag = tag; item._reset = reset; reviewItems.push(item);
       });
     }
     function answered(item){ return !!document.querySelector('input[name="'+item.getAttribute('data-group')+'"]:checked'); }
     function updateProgress(){
       let done = 0;
       reviewItems.forEach(item=>{
-        if(answered(item)){ done++; item._tag.className='ritag done'; item._tag.textContent='✓ Answered'; const c=item.closest('.card'); if(c) c.classList.remove('attention'); }
-        else { item._tag.className='ritag todo'; item._tag.textContent='• Needs your input'; }
+        if(answered(item)){ done++; item._tag.className='ritag done'; item._tag.textContent='✓ Answered'; item._reset.style.display=''; const c=item.closest('.card'); if(c) c.classList.remove('attention'); }
+        else { item._tag.className='ritag todo'; item._tag.textContent='• Needs your input'; item._reset.style.display='none'; }
       });
       const total = reviewItems.length, pct = total ? Math.round(done/total*100) : 0;
       const fill = document.getElementById('pfill'); fill.style.width = pct+'%'; fill.classList.toggle('done', total>0 && done===total);
