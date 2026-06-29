@@ -1,0 +1,8 @@
+deployment:
+  tasks:
+    - export DEPLOYPATH=/home4/tonyketter/nineonetwo.online/bodyworks
+    - /bin/mkdir -p $DEPLOYPATH
+    - /bin/cp index.php $DEPLOYPATH
+    - /bin/cp blueprint.php $DEPLOYPATH
+    - /bin/cp secret.sample.php $DEPLOYPATH
+    - /bin/cp README.md $DEPLOYPATH
