@@ -26,6 +26,8 @@ $DATA_FILE = $DATA_DIR . '/blueprint_input.json';
 $HIST_FILE = $DATA_DIR . '/blueprint_history.jsonl';
 $ACT_FILE  = $DATA_DIR . '/activity.jsonl';
 $CHG_FILE  = $DATA_DIR . '/changes.jsonl';
+$PRES_FILE = $DATA_DIR . '/presence.json';
+const BP_ONLINE_SECS = 75; // treat as "online" if seen within this many seconds
 
 /** Append one JSON line to a log file. */
 function bp_log($file, array $entry) {
@@ -34,6 +36,25 @@ function bp_log($file, array $entry) {
     @file_put_contents($file, json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND);
 }
 function bp_ip() { return $_SERVER['REMOTE_ADDR'] ?? ''; }
+
+/** Read/update the presence map (username => last-seen unix time). */
+function bp_presence_read($file) { $p = is_file($file) ? json_decode(file_get_contents($file), true) : []; return is_array($p) ? $p : []; }
+function bp_touch($file, $user) {
+    if (!$user) return;
+    $p = bp_presence_read($file); $p[$user] = time();
+    $dir = dirname($file); if (!is_dir($dir)) @mkdir($dir, 0775, true);
+    @file_put_contents($file, json_encode($p));
+}
+/** Presence of all users except $self: [user, name, online, secs]. */
+function bp_presence_others($file, $users, $self) {
+    $p = bp_presence_read($file); $now = time(); $out = [];
+    foreach ($users as $u) {
+        if (($u['user'] ?? '') === $self) continue;
+        $ts = $p[$u['user'] ?? ''] ?? 0; $secs = $ts ? ($now - $ts) : null;
+        $out[] = ['user' => $u['user'] ?? '', 'name' => $u['name'] ?? ($u['user'] ?? ''), 'online' => ($ts && $secs <= BP_ONLINE_SECS), 'secs' => $secs];
+    }
+    return $out;
+}
 
 /** Friendly label for a field key. */
 function bp_field_label($k) {
@@ -224,6 +245,15 @@ if ($action === 'export') {
     exit;
 }
 
+// ---- presence heartbeat ----
+if ($action === 'ping') {
+    header('Content-Type: application/json');
+    if (!$authed) { echo json_encode(['ok' => false]); exit; }
+    bp_touch($PRES_FILE, $_SESSION['bp_user'] ?? '');
+    echo json_encode(['ok' => true, 'users' => bp_presence_others($PRES_FILE, $users, $_SESSION['bp_user'] ?? '')]);
+    exit;
+}
+
 // ---- printable answers (any signed-in user) ----
 if ($action === 'print') {
     if (empty($_SESSION['bp_auth'])) { header('Location: blueprint.php'); exit; }
@@ -393,6 +423,13 @@ if ($action === 'logs') {
     exit;
 }
 
+// ---- presence: mark current user online, gather others (for admin) ----
+$presenceOthers = [];
+if ($authed) {
+    bp_touch($PRES_FILE, $_SESSION['bp_user'] ?? '');
+    if (($_SESSION['bp_role'] ?? '') === 'admin') $presenceOthers = bp_presence_others($PRES_FILE, $users, $_SESSION['bp_user'] ?? '');
+}
+
 // ---- load saved input ----
 $saved = null; $savedAt = null;
 if (is_file($DATA_FILE)) {
@@ -464,6 +501,12 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
   .top .bar{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap}
   .hlogo{display:inline-block;background:#fff;border-radius:11px;padding:8px 12px;margin-bottom:12px;box-shadow:0 6px 16px rgba(8,18,40,.25)}
   .hlogoimg{width:172px;height:auto;display:block}
+  .presrow{display:flex;flex-direction:column;gap:6px;align-items:flex-end;margin-bottom:8px}
+  .preschip{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.32);color:#fff;border-radius:20px;padding:4px 11px}
+  .preschip .dot{width:9px;height:9px;border-radius:50%;background:#9fb0c4;flex:0 0 auto}
+  .preschip.on .dot{background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.4);animation:livedot 1.6s ease-in-out infinite}
+  @keyframes livedot{0%,100%{box-shadow:0 0 0 3px rgba(34,197,94,.4)}50%{box-shadow:0 0 0 6px rgba(34,197,94,.12)}}
+  .preschip .pstate{opacity:.85;font-weight:500}
   .logout{color:#fff;border:1px solid rgba(255,255,255,.45);padding:7px 13px;border-radius:9px;text-decoration:none;font-size:13px;font-weight:500;white-space:nowrap}
   .logout:hover{background:rgba(255,255,255,.14)}
   /* cards */
@@ -649,6 +692,13 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
         <div style="text-align:right;white-space:nowrap">
           <div style="font-size:12px;opacity:.85;margin-bottom:6px">Signed in as <?= h($_SESSION['bp_name'] ?? '') ?></div>
           <?php if (($_SESSION['bp_role'] ?? '') === 'admin'): ?>
+            <div class="presrow" id="presrow">
+              <?php foreach ($presenceOthers as $o): ?>
+                <span class="preschip <?= $o['online'] ? 'on' : 'off' ?>" data-user="<?= h($o['user']) ?>">
+                  <span class="dot"></span><span class="pname"><?= h($o['name']) ?></span> <span class="pstate"><?= $o['online'] ? 'online' : 'offline' ?></span>
+                </span>
+              <?php endforeach; ?>
+            </div>
             <a class="logout" href="blueprint.php?action=logs"><i data-lucide="scroll-text"></i> View logs</a>
           <?php endif; ?>
           <a class="logout" href="blueprint.php?action=logout"><i data-lucide="log-out"></i> Sign out</a>
@@ -966,6 +1016,22 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
     const wel = document.getElementById('welcome');
     if(SAVED){ wel.textContent='Welcome back — your saved answers are loaded. Edit anything and press Save again.'; wel.style.display='block'; }
     else if(restored){ wel.textContent='We restored your unsaved draft from this device. Review it and Save when ready.'; wel.style.display='block'; }
+
+    // ---- presence heartbeat ----
+    function agoText(s){ if(s==null) return 'not seen yet'; if(s<60) return 'just now'; const m=Math.floor(s/60); if(m<60) return m+' min ago'; const h=Math.floor(m/60); return h+' h ago'; }
+    function updatePresence(list){
+      const row=document.getElementById('presrow'); if(!row||!list) return;
+      list.forEach(u=>{
+        let chip=row.querySelector('.preschip[data-user="'+u.user+'"]');
+        if(!chip){ chip=document.createElement('span'); chip.className='preschip'; chip.setAttribute('data-user',u.user);
+          chip.innerHTML='<span class="dot"></span><span class="pname"></span> <span class="pstate"></span>'; row.appendChild(chip); }
+        chip.classList.toggle('on', !!u.online); chip.classList.toggle('off', !u.online);
+        chip.querySelector('.pname').textContent=u.name;
+        chip.querySelector('.pstate').textContent = u.online ? 'online' : ('offline · '+agoText(u.secs));
+      });
+    }
+    async function ping(){ try{ const r=await fetch('blueprint.php?action=ping',{cache:'no-store'}); const j=await r.json(); if(j.ok) updatePresence(j.users); }catch(e){} }
+    ping(); setInterval(ping, 25000);
   </script>
 
 <?php endif; ?>
