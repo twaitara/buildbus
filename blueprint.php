@@ -537,15 +537,6 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
       </ol>
     </div>
 
-    <div class="card">
-      <h2>Your details</h2>
-      <p class="lead">So we know who reviewed this.</p>
-      <div class="grid2">
-        <div><label class="fld">Business / shop name</label><input type="text" name="client_name" value="Identity Auto Fabricators Limited"></div>
-        <div><label class="fld">Your name &amp; role</label><input type="text" name="reviewer" placeholder="e.g. John, Workshop Manager"></div>
-      </div>
-    </div>
-
     <div class="sectlabel">The workflow, step by step</div>
 
     <?php foreach ($phases as $p): ?>
