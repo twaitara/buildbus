@@ -159,6 +159,20 @@ if ($action === 'save') {
     exit;
 }
 
+// ---- admin export (download saved data) ----
+if ($action === 'export') {
+    if (empty($_SESSION['bp_auth']) || ($_SESSION['bp_role'] ?? '') !== 'admin') { http_response_code(403); echo 'Forbidden — admins only.'; exit; }
+    $what = $_GET['what'] ?? 'input';
+    $map = ['input' => $DATA_FILE, 'history' => $HIST_FILE, 'changes' => $CHG_FILE, 'activity' => $ACT_FILE];
+    $file = $map[$what] ?? $DATA_FILE;
+    $ext  = ($what === 'input') ? 'json' : 'jsonl';
+    $name = 'identity-blueprint-' . preg_replace('/[^a-z]/', '', $what) . '-' . date('Ymd-His') . '.' . $ext;
+    header('Content-Type: application/octet-stream');
+    header('Content-Disposition: attachment; filename="' . $name . '"');
+    if (is_file($file)) readfile($file); else echo ($what === 'input') ? '{}' : '';
+    exit;
+}
+
 // ---- admin logs view ----
 if ($action === 'logs') {
     if (empty($_SESSION['bp_auth'])) { header('Location: blueprint.php'); exit; }
@@ -200,6 +214,11 @@ if ($action === 'logs') {
       th{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#5b6b80;font-weight:600}
       .tag{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;border-radius:20px;padding:2px 10px}
       .tag .lucide{width:13px;height:13px}
+      .dlbar{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0 0}
+      .dlbtn{display:inline-flex;align-items:center;gap:7px;background:#1f6feb;color:#fff;text-decoration:none;font-size:13px;font-weight:600;border-radius:10px;padding:9px 14px}
+      .dlbtn:hover{background:#13427e}
+      .dlbtn.alt{background:#fff;color:#13427e;border:1px solid #cfe0fb} .dlbtn.alt:hover{background:#eef5ff}
+      .dlbtn .lucide{width:15px;height:15px}
       .tag.login{background:#e6f7f1;color:#0c7a5c} .tag.logout{background:#eef2f8;color:#5b6b80}
       .tag.save{background:#e9f1ff;color:#13427e} .tag.login-failed{background:#fbeaea;color:#b3261e}
       .empty{text-align:center;color:#5b6b80;padding:24px}
@@ -218,6 +237,11 @@ if ($action === 'logs') {
     <div class="top"><div class="wrap"><div><div style="background:#fff;border-radius:10px;padding:6px 10px;display:inline-block;margin-bottom:8px"><?= identity_logo('hlogoimg') ?></div><h1>Activity logs</h1></div><a href="blueprint.php">← Back to blueprint</a></div></div>
     <style>.top .hlogoimg{width:150px;height:auto;display:block}</style>
     <div class="wrap">
+      <div class="dlbar">
+        <a class="dlbtn" href="blueprint.php?action=export&what=input"><i data-lucide="download"></i> Download answers (JSON)</a>
+        <a class="dlbtn alt" href="blueprint.php?action=export&what=changes"><i data-lucide="history"></i> Download change log</a>
+        <a class="dlbtn alt" href="blueprint.php?action=export&what=activity"><i data-lucide="activity"></i> Download activity</a>
+      </div>
       <div class="card">
         <h2>Change map (<?= count($changesLog) ?> updates)</h2>
         <p class="muted">A running map of every change to the blueprint, newest first — who changed what, and when.</p>
