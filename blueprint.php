@@ -8,8 +8,8 @@ session_start();
 
 // ---- users (override via secret.php) ----
 $users = [
-    ['user' => 'tito', 'pass' => 'CHANGE_ME_DEV', 'name' => 'Tito (developer)'],
-    ['user' => 'ann',  'pass' => 'CHANGE_ME_ANN', 'name' => 'Ann'],
+    ['user' => 'tito', 'pass' => 'CHANGE_ME_DEV', 'name' => 'Tito (developer)', 'role' => 'admin'],
+    ['user' => 'ann',  'pass' => 'CHANGE_ME_ANN', 'name' => 'Ann',             'role' => 'editor'],
 ];
 if (is_file(__DIR__ . '/secret.php')) {
     $s = require __DIR__ . '/secret.php';
@@ -19,6 +19,15 @@ if (is_file(__DIR__ . '/secret.php')) {
 $DATA_DIR  = __DIR__ . '/data';
 $DATA_FILE = $DATA_DIR . '/blueprint_input.json';
 $HIST_FILE = $DATA_DIR . '/blueprint_history.jsonl';
+$ACT_FILE  = $DATA_DIR . '/activity.jsonl';
+
+/** Append one JSON line to a log file. */
+function bp_log($file, array $entry) {
+    $dir = dirname($file);
+    if (!is_dir($dir)) @mkdir($dir, 0775, true);
+    @file_put_contents($file, json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND);
+}
+function bp_ip() { return $_SERVER['REMOTE_ADDR'] ?? ''; }
 
 if (empty($_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(16));
 $csrf   = $_SESSION['csrf'];
@@ -27,6 +36,9 @@ $authed = !empty($_SESSION['bp_auth']);
 
 // ---- logout ----
 if ($action === 'logout') {
+    if (!empty($_SESSION['bp_auth'])) {
+        bp_log($ACT_FILE, ['at' => date('c'), 'user' => $_SESSION['bp_user'] ?? '', 'name' => $_SESSION['bp_name'] ?? '', 'action' => 'logout', 'ip' => bp_ip()]);
+    }
     $_SESSION = [];
     session_destroy();
     header('Location: blueprint.php');
@@ -44,11 +56,14 @@ if ($action === 'login' && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['bp_auth'] = true;
             $_SESSION['bp_user'] = $u['user'];
             $_SESSION['bp_name'] = $u['name'] ?? $u['user'];
+            $_SESSION['bp_role'] = $u['role'] ?? 'editor';
             $_SESSION['csrf'] = bin2hex(random_bytes(16));
+            bp_log($ACT_FILE, ['at' => date('c'), 'user' => $u['user'], 'name' => $_SESSION['bp_name'], 'action' => 'login', 'ip' => bp_ip()]);
             header('Location: blueprint.php');
             exit;
         }
     }
+    bp_log($ACT_FILE, ['at' => date('c'), 'user' => $inU, 'name' => '', 'action' => 'login-failed', 'ip' => bp_ip()]);
     $loginError = 'Wrong username or password.';
 }
 
@@ -64,7 +79,82 @@ if ($action === 'save') {
     $record = ['saved_at' => date('c'), 'by' => ($_SESSION['bp_name'] ?? 'unknown'), 'data' => $body['data'] ?? []];
     file_put_contents($DATA_FILE, json_encode($record, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
     file_put_contents($HIST_FILE, json_encode($record, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND);
+    bp_log($ACT_FILE, ['at' => date('c'), 'user' => $_SESSION['bp_user'] ?? '', 'name' => $_SESSION['bp_name'] ?? '', 'action' => 'save', 'ip' => bp_ip()]);
     echo json_encode(['ok' => true, 'saved_at' => $record['saved_at']]);
+    exit;
+}
+
+// ---- admin logs view ----
+if ($action === 'logs') {
+    if (empty($_SESSION['bp_auth'])) { header('Location: blueprint.php'); exit; }
+    if (($_SESSION['bp_role'] ?? '') !== 'admin') { http_response_code(403); echo 'Forbidden — admins only.'; exit; }
+
+    $activity = [];
+    if (is_file($ACT_FILE)) {
+        foreach (array_reverse(array_filter(explode("\n", file_get_contents($ACT_FILE)))) as $ln) {
+            $e = json_decode($ln, true); if (is_array($e)) $activity[] = $e;
+        }
+    }
+    $saves = [];
+    if (is_file($HIST_FILE)) {
+        foreach (array_reverse(array_filter(explode("\n", file_get_contents($HIST_FILE)))) as $ln) {
+            $e = json_decode($ln, true); if (is_array($e)) $saves[] = $e;
+        }
+    }
+    $actIcon = ['login' => '🔓', 'logout' => '🔒', 'save' => '💾', 'login-failed' => '⛔'];
+    function when($iso) { $t = strtotime($iso); return $t ? date('j M Y, g:i:s a', $t) : h($iso); }
+    ?><!doctype html><html lang="en"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Activity logs — admin</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      *{box-sizing:border-box} body{margin:0;font-family:'Inter',system-ui,Arial,sans-serif;background:#f4f6fb;color:#16202e;line-height:1.6}
+      .wrap{max-width:920px;margin:0 auto;padding:0 18px 60px}
+      .top{background:linear-gradient(135deg,#13427e,#1f6feb);color:#fff;padding:26px 0}
+      .top .wrap{padding-bottom:0;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
+      .top h1{margin:0;font-size:22px} .top a{color:#fff;border:1px solid rgba(255,255,255,.45);padding:7px 13px;border-radius:9px;text-decoration:none;font-size:13px;font-weight:500}
+      .card{background:#fff;border:1px solid #e3e8f0;border-radius:16px;box-shadow:0 8px 24px rgba(16,32,55,.06);padding:20px;margin:18px 0}
+      h2{font-size:17px;margin:0 0 12px} .muted{color:#5b6b80;font-size:13px}
+      table{width:100%;border-collapse:collapse;font-size:14px} th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #eef2f8;vertical-align:top}
+      th{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#5b6b80;font-weight:600}
+      .tag{display:inline-block;font-size:12px;font-weight:600;border-radius:20px;padding:2px 10px}
+      .tag.login{background:#e6f7f1;color:#0c7a5c} .tag.logout{background:#eef2f8;color:#5b6b80}
+      .tag.save{background:#e9f1ff;color:#13427e} .tag.login-failed{background:#fbeaea;color:#b3261e}
+      .empty{text-align:center;color:#5b6b80;padding:24px}
+      details{margin:6px 0;border:1px solid #eef2f8;border-radius:10px;padding:8px 12px}
+      summary{cursor:pointer;font-weight:500;font-size:14px} pre{background:#f7f9fc;border-radius:8px;padding:12px;overflow:auto;font-size:12px;margin:10px 0 0}
+    </style></head><body>
+    <div class="top"><div class="wrap"><h1>Activity logs</h1><a href="blueprint.php">← Back to blueprint</a></div></div>
+    <div class="wrap">
+      <div class="card">
+        <h2>Activity (<?= count($activity) ?>)</h2>
+        <p class="muted">Every sign-in, sign-out, save and failed login — newest first.</p>
+        <?php if (!$activity): ?><div class="empty">No activity yet.</div><?php else: ?>
+        <table><thead><tr><th>When</th><th>Action</th><th>Who</th><th>IP</th></tr></thead><tbody>
+        <?php foreach ($activity as $e): $a = $e['action'] ?? ''; ?>
+          <tr>
+            <td><?= when($e['at'] ?? '') ?></td>
+            <td><span class="tag <?= h($a) ?>"><?= ($actIcon[$a] ?? '•') . ' ' . h($a) ?></span></td>
+            <td><?= h(($e['name'] ?? '') ?: ($e['user'] ?? '')) ?></td>
+            <td class="muted"><?= h($e['ip'] ?? '') ?></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody></table>
+        <?php endif; ?>
+      </div>
+      <div class="card">
+        <h2>Saved blueprint versions (<?= count($saves) ?>)</h2>
+        <p class="muted">Each time someone saves, the full blueprint is stored. Expand to see what was saved.</p>
+        <?php if (!$saves): ?><div class="empty">No saves yet.</div><?php else: ?>
+        <?php foreach ($saves as $i => $rec): ?>
+          <details<?= $i === 0 ? ' open' : '' ?>>
+            <summary><?= when($rec['saved_at'] ?? '') ?> — by <?= h($rec['by'] ?? 'unknown') ?><?= $i === 0 ? ' · latest' : '' ?></summary>
+            <pre><?= h(json_encode($rec['data'] ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)) ?></pre>
+          </details>
+        <?php endforeach; ?>
+        <?php endif; ?>
+      </div>
+    </div></body></html><?php
     exit;
 }
 
@@ -195,33 +285,86 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
   .toast{position:fixed;bottom:84px;left:50%;transform:translateX(-50%) translateY(20px);background:#16202e;color:#fff;padding:11px 20px;border-radius:11px;font-size:14px;font-weight:500;opacity:0;transition:.25s;z-index:30;pointer-events:none}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
   .toast.err{background:#b3261e}
-  /* login */
-  .login{max-width:380px;margin:9vh auto;padding:0 18px}
-  .login .card{padding:28px}
-  .login h1{font-size:21px;margin:0 0 4px}
-  .login p{color:var(--muted);font-size:14px;margin:0 0 20px}
-  .login label{display:block;font-size:13px;font-weight:600;margin:12px 0 5px}
-  .login .btn{width:100%;margin-top:18px}
+  /* ---- animated login ---- */
+  .authpage{position:fixed;inset:0;overflow:hidden;display:flex;align-items:center;justify-content:center;padding:20px;
+    background:linear-gradient(120deg,#1f6feb,#0f9d76,#b9760f,#7a3ff2,#1f6feb);background-size:300% 300%;animation:grad 14s ease infinite}
+  @keyframes grad{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+  .blob{position:absolute;border-radius:50%;filter:blur(38px);opacity:.55;mix-blend-mode:screen;animation:floaty 12s ease-in-out infinite}
+  .b1{width:260px;height:260px;background:#ff5d8f;top:-60px;left:-40px}
+  .b2{width:300px;height:300px;background:#34d1bf;bottom:-80px;right:-60px;animation-delay:-3s}
+  .b3{width:200px;height:200px;background:#ffd166;top:28%;right:10%;animation-delay:-6s}
+  .b4{width:220px;height:220px;background:#8a5cff;bottom:8%;left:6%;animation-delay:-9s}
+  @keyframes floaty{0%,100%{transform:translate(0,0) scale(1)}33%{transform:translate(24px,-30px) scale(1.08)}66%{transform:translate(-20px,20px) scale(.95)}}
+  .authcard{position:relative;z-index:2;width:100%;max-width:400px;background:rgba(255,255,255,.96);border-radius:22px;
+    padding:30px 30px 24px;box-shadow:0 24px 70px rgba(8,18,40,.45);animation:rise .7s cubic-bezier(.2,.8,.2,1) both;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+  @keyframes rise{from{opacity:0;transform:translateY(28px) scale(.97)}to{opacity:1;transform:none}}
+  .brandrow{display:flex;align-items:center;gap:13px;margin-bottom:4px}
+  .logo{width:50px;height:50px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:26px;
+    background:linear-gradient(135deg,#1f6feb,#0f9d76);box-shadow:0 8px 20px rgba(31,111,235,.4);animation:bob 3s ease-in-out infinite}
+  @keyframes bob{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-5px) rotate(3deg)}}
+  .kicker{font-size:11px;letter-spacing:.16em;text-transform:uppercase;font-weight:700;color:#1f6feb}
+  .authcard h1{margin:2px 0 0;font-size:22px;font-weight:700;background:linear-gradient(90deg,#13427e,#0f9d76,#b9760f);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{color:#5b6b80;font-size:14px;margin:8px 0 18px}
+  .stages{margin:0 0 22px}
+  .track{position:relative;height:7px;border-radius:6px;background:#eef2f8;overflow:hidden}
+  .fill{position:absolute;top:0;bottom:0;left:0;right:100%;border-radius:6px;background:linear-gradient(90deg,#1f6feb,#34d1bf,#ffd166,#ff5d8f,#8a5cff);background-size:200% 100%;animation:fillbar 4s ease-in-out infinite,hue 4s linear infinite}
+  @keyframes fillbar{0%{right:100%}60%{right:0}100%{right:0;opacity:.85}}
+  @keyframes hue{to{background-position:200% 0}}
+  .dots{display:flex;justify-content:space-between;margin-top:10px}
+  .dot{width:14px;height:14px;border-radius:50%;background:#cdd6e3;transform:scale(.7);animation:pop 4s ease-in-out infinite}
+  .d1{animation-delay:0s}.d2{animation-delay:.5s}.d3{animation-delay:1s}.d4{animation-delay:1.5s}.d5{animation-delay:2s}.d6{animation-delay:2.5s}
+  @keyframes pop{0%,100%{transform:scale(.7);background:#cdd6e3}40%,60%{transform:scale(1.25)}50%{background:var(--dc,#1f6feb)}}
+  .stagelabels{display:flex;justify-content:space-between;margin-top:7px}
+  .stagelabels span{font-size:10px;color:#8a97a8;font-weight:600}
+  .authcard label{display:block;font-size:13px;font-weight:600;margin:12px 0 5px;color:#34465c}
+  .inp{width:100%;font:inherit;font-size:15px;border:1.5px solid #e3e8f0;border-radius:12px;padding:12px 13px;transition:.2s;background:#fff}
+  .inp:focus{outline:none;border-color:#1f6feb;box-shadow:0 0 0 4px rgba(31,111,235,.15)}
+  .bigbtn{position:relative;width:100%;margin-top:20px;padding:14px;font:inherit;font-size:16px;font-weight:700;border:none;border-radius:13px;color:#fff;cursor:pointer;overflow:hidden;
+    background:linear-gradient(90deg,#1f6feb,#0f9d76);background-size:200% 100%;animation:hue 5s linear infinite;box-shadow:0 12px 26px rgba(15,157,118,.4);transition:transform .15s}
+  .bigbtn:hover{transform:translateY(-2px)}
+  .bigbtn:active{transform:translateY(0)}
+  .bigbtn::after{content:"";position:absolute;top:0;left:-60%;width:40%;height:100%;background:linear-gradient(100deg,transparent,rgba(255,255,255,.5),transparent);transform:skewX(-20deg);animation:shine 3.2s ease-in-out infinite}
+  @keyframes shine{0%{left:-60%}55%,100%{left:130%}}
+  .foot{text-align:center;font-size:12px;color:#8a97a8;margin-top:16px}
   .err{background:#fbeaea;color:#b3261e;border-radius:10px;padding:9px 12px;font-size:13px;font-weight:500;margin-bottom:6px}
-  .flow{font-size:13px;color:var(--muted);margin:2px 0 0}
+  @media(prefers-reduced-motion:reduce){.authpage,.blob,.logo,.fill,.dot,.bigbtn,.bigbtn::after,.authcard{animation:none}.fill{right:0}}
 </style>
 </head>
 <body>
 
 <?php if (!$authed): ?>
-  <div class="login">
-    <div class="card">
-      <h1>Production system blueprint</h1>
-      <p>Bus &amp; truck body build. Please sign in with the username and password you were given.</p>
+  <div class="authpage">
+    <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="blob b4"></div>
+    <div class="authcard">
+      <div class="brandrow">
+        <div class="logo">🚌</div>
+        <div>
+          <div class="kicker">Nine One Two · Bodyworks</div>
+          <h1>Production blueprint</h1>
+        </div>
+      </div>
+      <p class="sub">Welcome! Sign in to help shape how the bus &amp; truck build system will work.</p>
+      <div class="stages" aria-hidden="true">
+        <div class="track"><div class="fill"></div></div>
+        <div class="dots">
+          <span class="dot d1" style="--dc:#1f6feb"></span>
+          <span class="dot d2" style="--dc:#34d1bf"></span>
+          <span class="dot d3" style="--dc:#0f9d76"></span>
+          <span class="dot d4" style="--dc:#ffd166"></span>
+          <span class="dot d5" style="--dc:#ff5d8f"></span>
+          <span class="dot d6" style="--dc:#8a5cff"></span>
+        </div>
+        <div class="stagelabels"><span>Frame</span><span>Sheeting</span><span>Filler</span><span>Paint</span><span>Finishing</span><span>PDI</span></div>
+      </div>
       <?php if ($loginError): ?><div class="err"><?= h($loginError) ?></div><?php endif; ?>
       <form method="post" action="blueprint.php?action=login">
         <label>Username</label>
-        <input type="text" name="username" autocomplete="username" autofocus required>
+        <input class="inp" type="text" name="username" autocomplete="username" autofocus required>
         <label>Password</label>
-        <input type="password" name="password" autocomplete="current-password" required
-               style="width:100%;font:inherit;font-size:14px;border:1px solid var(--line);border-radius:10px;padding:9px 11px">
-        <button class="btn" type="submit">Sign in</button>
+        <input class="inp" type="password" name="password" autocomplete="current-password" required>
+        <button class="bigbtn" type="submit">Sign in &nbsp;→</button>
       </form>
+      <div class="foot">🔒 Private — access by invite only</div>
     </div>
   </div>
 
@@ -237,6 +380,9 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
         </div>
         <div style="text-align:right;white-space:nowrap">
           <div style="font-size:12px;opacity:.85;margin-bottom:6px">Signed in as <?= h($_SESSION['bp_name'] ?? '') ?></div>
+          <?php if (($_SESSION['bp_role'] ?? '') === 'admin'): ?>
+            <a class="logout" href="blueprint.php?action=logs">📋 View logs</a>
+          <?php endif; ?>
           <a class="logout" href="blueprint.php?action=logout">Sign out</a>
         </div>
       </div>
