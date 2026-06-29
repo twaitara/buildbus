@@ -41,7 +41,13 @@ function bp_ip() { return $_SERVER['REMOTE_ADDR'] ?? ''; }
 function bp_presence_read($file) { $p = is_file($file) ? json_decode(file_get_contents($file), true) : []; return is_array($p) ? $p : []; }
 function bp_touch($file, $user) {
     if (!$user) return;
-    $p = bp_presence_read($file); $p[$user] = time();
+    $p = bp_presence_read($file); $now = time();
+    $prev = $p[$user] ?? null;
+    $prevSeen  = is_array($prev) ? (int)($prev['seen'] ?? 0) : (int)$prev;
+    $prevSince = is_array($prev) ? (int)($prev['since'] ?? $prevSeen) : (int)$prev;
+    // keep the same session if last seen recently, else start a new one
+    $since = ($prevSeen && ($now - $prevSeen) <= BP_ONLINE_SECS && $prevSince) ? $prevSince : $now;
+    $p[$user] = ['seen' => $now, 'since' => $since];
     $dir = dirname($file); if (!is_dir($dir)) @mkdir($dir, 0775, true);
     @file_put_contents($file, json_encode($p));
 }
@@ -50,15 +56,28 @@ function bp_untouch($file, $user) {
     $p = bp_presence_read($file);
     if (isset($p[$user])) { unset($p[$user]); @file_put_contents($file, json_encode($p)); }
 }
-/** Presence of all users except $self: [user, name, online, secs]. */
+/** Presence of all users except $self: [user, name, online, secs, online_for]. */
 function bp_presence_others($file, $users, $self) {
     $p = bp_presence_read($file); $now = time(); $out = [];
     foreach ($users as $u) {
-        if (($u['user'] ?? '') === $self) continue;
-        $ts = $p[$u['user'] ?? ''] ?? 0; $secs = $ts ? ($now - $ts) : null;
-        $out[] = ['user' => $u['user'] ?? '', 'name' => $u['name'] ?? ($u['user'] ?? ''), 'online' => ($ts && $secs <= BP_ONLINE_SECS), 'secs' => $secs];
+        $uid = $u['user'] ?? '';
+        if ($uid === $self) continue;
+        $rec = $p[$uid] ?? null;
+        $seen  = is_array($rec) ? (int)($rec['seen'] ?? 0) : (int)$rec;
+        $since = is_array($rec) ? (int)($rec['since'] ?? $seen) : (int)$rec;
+        $online = ($seen && ($now - $seen) <= BP_ONLINE_SECS);
+        $out[] = ['user' => $uid, 'name' => $u['name'] ?? $uid, 'online' => $online,
+                  'secs' => $seen ? ($now - $seen) : null,
+                  'online_for' => ($online && $since) ? ($now - $since) : null];
     }
     return $out;
+}
+/** "12 min", "1h 5m", "just now". */
+function bp_dur($s) {
+    if ($s === null) return '';
+    if ($s < 60) return 'just now';
+    $m = intdiv($s, 60); if ($m < 60) return $m . ' min';
+    $h = intdiv($m, 60); $m %= 60; return $h . 'h' . ($m ? ' ' . $m . 'm' : '');
 }
 
 /** Friendly label for a field key. */
@@ -707,7 +726,7 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
             <div class="presrow" id="presrow">
               <?php foreach ($presenceOthers as $o): ?>
                 <span class="preschip <?= $o['online'] ? 'on' : 'off' ?>" data-user="<?= h($o['user']) ?>">
-                  <span class="dot"></span><span class="pname"><?= h($o['name']) ?></span> <span class="pstate"><?= $o['online'] ? 'online' : 'offline' ?></span>
+                  <span class="dot"></span><span class="pname"><?= h($o['name']) ?></span> <span class="pstate"><?= $o['online'] ? 'online · ' . h(bp_dur($o['online_for'])) : 'offline' ?></span>
                 </span>
               <?php endforeach; ?>
             </div>
@@ -1031,6 +1050,7 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 
     // ---- presence heartbeat ----
     function agoText(s){ if(s==null) return 'not seen yet'; if(s<60) return 'just now'; const m=Math.floor(s/60); if(m<60) return m+' min ago'; const h=Math.floor(m/60); return h+' h ago'; }
+    function durText(s){ if(s==null) return ''; if(s<60) return 'just now'; const m=Math.floor(s/60); if(m<60) return m+' min'; const h=Math.floor(m/60), mm=m%60; return h+'h'+(mm?' '+mm+'m':''); }
     function updatePresence(list){
       const row=document.getElementById('presrow'); if(!row||!list) return;
       list.forEach(u=>{
@@ -1039,9 +1059,18 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
           chip.innerHTML='<span class="dot"></span><span class="pname"></span> <span class="pstate"></span>'; row.appendChild(chip); }
         chip.classList.toggle('on', !!u.online); chip.classList.toggle('off', !u.online);
         chip.querySelector('.pname').textContent=u.name;
-        chip.querySelector('.pstate').textContent = u.online ? 'online' : ('offline · '+agoText(u.secs));
+        if(u.online){ chip.dataset.since = String(Date.now() - (u.online_for||0)*1000); }
+        else { delete chip.dataset.since; chip.querySelector('.pstate').textContent = 'offline · '+agoText(u.secs); }
+      });
+      tickPresence();
+    }
+    function tickPresence(){
+      document.querySelectorAll('#presrow .preschip.on').forEach(chip=>{
+        const since=+chip.dataset.since; if(!since) return;
+        chip.querySelector('.pstate').textContent = 'online · '+durText(Math.floor((Date.now()-since)/1000));
       });
     }
+    setInterval(tickPresence, 1000);
     async function ping(){ try{ const r=await fetch('blueprint.php?action=ping',{cache:'no-store'}); const j=await r.json(); if(j.ok) updatePresence(j.users); }catch(e){} }
     function goOffline(){ try{ if(navigator.sendBeacon) navigator.sendBeacon('blueprint.php?action=offline'); else fetch('blueprint.php?action=offline',{keepalive:true}); }catch(e){} }
     window.addEventListener('pagehide', goOffline);
