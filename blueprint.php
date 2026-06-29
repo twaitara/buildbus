@@ -182,7 +182,7 @@ if ($action === 'logs') {
             $e = json_decode($ln, true); if (is_array($e)) $changesLog[] = $e;
         }
     }
-    $actIcon = ['login' => '🔓', 'logout' => '🔒', 'save' => '💾', 'login-failed' => '⛔'];
+    $actIcon = ['login' => 'log-in', 'logout' => 'log-out', 'save' => 'save', 'login-failed' => 'shield-alert'];
     function when($iso) { $t = strtotime($iso); return $t ? date('j M Y, g:i:s a', $t) : h($iso); }
     ?><!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -198,7 +198,8 @@ if ($action === 'logs') {
       h2{font-size:17px;margin:0 0 12px} .muted{color:#5b6b80;font-size:13px}
       table{width:100%;border-collapse:collapse;font-size:14px} th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #eef2f8;vertical-align:top}
       th{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#5b6b80;font-weight:600}
-      .tag{display:inline-block;font-size:12px;font-weight:600;border-radius:20px;padding:2px 10px}
+      .tag{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;border-radius:20px;padding:2px 10px}
+      .tag .lucide{width:13px;height:13px}
       .tag.login{background:#e6f7f1;color:#0c7a5c} .tag.logout{background:#eef2f8;color:#5b6b80}
       .tag.save{background:#e9f1ff;color:#13427e} .tag.login-failed{background:#fbeaea;color:#b3261e}
       .empty{text-align:center;color:#5b6b80;padding:24px}
@@ -242,7 +243,7 @@ if ($action === 'logs') {
         <?php foreach ($activity as $e): $a = $e['action'] ?? ''; ?>
           <tr>
             <td><?= when($e['at'] ?? '') ?></td>
-            <td><span class="tag <?= h($a) ?>"><?= ($actIcon[$a] ?? '•') . ' ' . h($a) ?></span></td>
+            <td><span class="tag <?= h($a) ?>"><i data-lucide="<?= h($actIcon[$a] ?? 'dot') ?>"></i> <?= h($a) ?></span></td>
             <td><?= h(($e['name'] ?? '') ?: ($e['user'] ?? '')) ?></td>
             <td class="muted"><?= h($e['ip'] ?? '') ?></td>
           </tr>
@@ -262,7 +263,10 @@ if ($action === 'logs') {
         <?php endforeach; ?>
         <?php endif; ?>
       </div>
-    </div></body></html><?php
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
+    <script>window.lucide&&lucide.createIcons();</script>
+    </body></html><?php
     exit;
 }
 
@@ -458,6 +462,14 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
   .celebrate{display:none;background:linear-gradient(135deg,#0f9d58,#0f9d76);color:#fff;border-radius:14px;padding:16px 18px;margin:18px 0;font-size:15px;font-weight:500}
   .celebrate.show{display:block;animation:rise .5s both}
   .celebrate b{font-weight:700}
+  /* ---- lucide icons ---- */
+  .lucide{width:18px;height:18px;flex:0 0 auto}
+  .btn,.bigbtn,.pnext,.logout,.addbtn,.resetbtn,.celebrate.show{display:inline-flex;align-items:center;gap:8px;justify-content:center}
+  .celebrate.show{justify-content:flex-start}
+  .helper h3{display:flex;align-items:center;gap:8px} .helper h3 .lucide{width:18px;height:18px;color:#1f6feb}
+  .sectlabel{display:flex;align-items:center;gap:7px} .sectlabel .lucide{width:15px;height:15px}
+  .ritag .lucide{width:14px;height:14px;margin-right:5px}
+  .foot{display:flex;align-items:center;justify-content:center;gap:6px} .foot .lucide{width:14px;height:14px}
 </style>
 </head>
 <body>
@@ -489,9 +501,11 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
         <input class="inp" type="password" name="password" autocomplete="current-password" required>
         <button class="bigbtn" type="submit">Sign in &nbsp;→</button>
       </form>
-      <div class="foot">🔒 Private — access by invite only</div>
+      <div class="foot"><i data-lucide="lock"></i> Private — access by invite only</div>
     </div>
   </div>
+  <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
+  <script>window.lucide&&lucide.createIcons();</script>
 
 <?php else: ?>
 
@@ -507,9 +521,9 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
         <div style="text-align:right;white-space:nowrap">
           <div style="font-size:12px;opacity:.85;margin-bottom:6px">Signed in as <?= h($_SESSION['bp_name'] ?? '') ?></div>
           <?php if (($_SESSION['bp_role'] ?? '') === 'admin'): ?>
-            <a class="logout" href="blueprint.php?action=logs">📋 View logs</a>
+            <a class="logout" href="blueprint.php?action=logs"><i data-lucide="scroll-text"></i> View logs</a>
           <?php endif; ?>
-          <a class="logout" href="blueprint.php?action=logout">Sign out</a>
+          <a class="logout" href="blueprint.php?action=logout"><i data-lucide="log-out"></i> Sign out</a>
         </div>
       </div>
     </div>
@@ -528,7 +542,7 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
     <div class="welcome" id="welcome" style="display:none"></div>
 
     <div class="helper">
-      <h3>How this works — about 10 minutes</h3>
+      <h3><i data-lucide="info"></i> How this works — about 10 minutes</h3>
       <ol>
         <li>Read each step of the proposed system below.</li>
         <li>Tap <b>Looks right</b> or <b>Needs a change</b> — add a note if you'd like something different.</li>
@@ -537,7 +551,7 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
       </ol>
     </div>
 
-    <div class="sectlabel">The workflow, step by step</div>
+    <div class="sectlabel"><i data-lucide="route"></i> The workflow, step by step</div>
 
     <?php foreach ($phases as $p): ?>
       <div class="card">
@@ -558,14 +572,14 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
       </div>
     <?php endforeach; ?>
 
-    <div class="sectlabel">Production stages — please correct these to match your shop</div>
+    <div class="sectlabel"><i data-lucide="layers"></i> Production stages — please correct these to match your shop</div>
 
     <div class="card">
       <h2>Bus build — sections in order</h2>
       <p class="lead">These are the sections a bus passes through. Rename them to your real section names, fix the order (top to bottom), tick <b>QC gate</b> where a quality check must be passed before moving on, add or remove rows as needed.</p>
       <div class="stagehead"><span class="pill bus">Bus</span><span class="hint">Edit names, tick QC gate, add or remove rows. If the order is wrong, note it below.</span></div>
       <div id="busList"></div>
-      <button type="button" class="addbtn" data-add="busList">+ Add a section</button>
+      <button type="button" class="addbtn" data-add="busList"><i data-lucide="plus"></i> Add a section</button>
     </div>
 
     <div class="card">
@@ -573,10 +587,10 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
       <p class="lead">Same idea for trucks. The truck flow is usually a little shorter than the bus flow.</p>
       <div class="stagehead"><span class="pill truck">Truck</span></div>
       <div id="truckList"></div>
-      <button type="button" class="addbtn" data-add="truckList">+ Add a section</button>
+      <button type="button" class="addbtn" data-add="truckList"><i data-lucide="plus"></i> Add a section</button>
     </div>
 
-    <div class="sectlabel">Key decisions — do you agree?</div>
+    <div class="sectlabel"><i data-lucide="circle-help"></i> Key decisions — do you agree?</div>
 
     <div class="card">
       <p class="lead">These are the choices that shape how the system behaves. Tell us if any should be different.</p>
@@ -592,7 +606,7 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
       <?php endforeach; ?>
     </div>
 
-    <div class="sectlabel">Anything we missed</div>
+    <div class="sectlabel"><i data-lucide="message-square-plus"></i> Anything we missed</div>
 
     <div class="card">
       <h2>Your notes</h2>
@@ -610,19 +624,21 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
       </div>
     </div>
 
-    <div class="celebrate" id="celebrate">🎉 <b>All reviewed — nicely done!</b> Press <b>Save my changes</b> to send it to the developer. You can still come back and edit anything later.</div>
+    <div class="celebrate" id="celebrate"><i data-lucide="party-popper"></i> <b>All reviewed — nicely done!</b> Press <b>Save my changes</b> to send it to the developer. You can still come back and edit anything later.</div>
 
   </div>
 
   <div class="savebar">
     <div class="wrap">
       <div class="savestatus" id="status"><?php if ($savedAt): ?>Last saved <?= h(date('j M Y, g:i a', strtotime($savedAt))) ?><?php else: ?>Not saved yet — your changes are not stored until you press Save.<?php endif; ?></div>
-      <button class="btn" id="saveBtn">Save my changes</button>
+      <button class="btn" id="saveBtn"><i data-lucide="save"></i> Save my changes</button>
     </div>
   </div>
   <div class="toast" id="toast"></div>
 
+  <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
   <script>
+    function icons(){ if(window.lucide) try{ lucide.createIcons(); }catch(e){} }
     const CSRF = <?= json_encode($csrf) ?>;
     const SAVED = <?= json_encode($saved, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: 'null' ?>;
     const DEFAULTS = {
@@ -719,7 +735,7 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
         const tag = document.createElement('div'); tag.className = 'ritag';
         seg.parentNode.insertBefore(tag, seg);
         const reset = document.createElement('button');
-        reset.type = 'button'; reset.className = 'resetbtn'; reset.textContent = '↺ Reset';
+        reset.type = 'button'; reset.className = 'resetbtn'; reset.innerHTML = '<i data-lucide="rotate-ccw"></i> Reset';
         reset.onclick = ()=>{
           document.querySelectorAll('input[name="'+item.getAttribute('data-group')+'"]').forEach(r=> r.checked=false);
           paintSegs(); markDirty(); updateProgress();
@@ -732,15 +748,16 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
     function updateProgress(){
       let done = 0;
       reviewItems.forEach(item=>{
-        if(answered(item)){ done++; item._tag.className='ritag done'; item._tag.textContent='✓ Answered'; item._reset.style.display=''; const c=item.closest('.card'); if(c) c.classList.remove('attention'); }
-        else { item._tag.className='ritag todo'; item._tag.textContent='• Needs your input'; item._reset.style.display='none'; }
+        if(answered(item)){ done++; item._tag.className='ritag done'; item._tag.innerHTML='<i data-lucide="check"></i>Answered'; item._reset.style.display=''; const c=item.closest('.card'); if(c) c.classList.remove('attention'); }
+        else { item._tag.className='ritag todo'; item._tag.innerHTML='<i data-lucide="circle-dashed"></i>Needs your input'; item._reset.style.display='none'; }
       });
       const total = reviewItems.length, pct = total ? Math.round(done/total*100) : 0;
       const fill = document.getElementById('pfill'); fill.style.width = pct+'%'; fill.classList.toggle('done', total>0 && done===total);
       document.getElementById('pcount').textContent = done+' of '+total+' reviewed';
       const next = document.getElementById('pnext'), cele = document.getElementById('celebrate');
-      if(total>0 && done===total){ next.disabled=true; next.textContent='All reviewed 🎉'; cele.classList.add('show'); }
-      else { next.disabled=false; next.textContent='Jump to next →'; cele.classList.remove('show'); }
+      if(total>0 && done===total){ next.disabled=true; next.innerHTML='All reviewed <i data-lucide="party-popper"></i>'; cele.classList.add('show'); }
+      else { next.disabled=false; next.innerHTML='Jump to next <i data-lucide="arrow-right"></i>'; cele.classList.remove('show'); }
+      icons();
     }
     document.getElementById('pnext').onclick = ()=>{
       const item = reviewItems.find(it=> !answered(it)); if(!item) return;
@@ -759,7 +776,7 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
     // ---- save ----
     const btn = document.getElementById('saveBtn');
     btn.onclick = async ()=>{
-      saving=true; btn.disabled=true; const old=btn.textContent; btn.textContent='Saving…';
+      saving=true; btn.disabled=true; const old=btn.innerHTML; btn.textContent='Saving…';
       try{
         const res = await fetch('blueprint.php?action=save', {
           method:'POST', headers:{'Content-Type':'application/json'},
@@ -772,7 +789,7 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
           setStatus('✓ All changes saved', '#0c7a5c');
         } else { toast(j.error || 'Could not save.', true); }
       }catch(e){ toast('Network error — please try again.', true); }
-      saving=false; btn.disabled=false; btn.textContent=old;
+      saving=false; btn.disabled=false; btn.innerHTML=old; icons();
     };
 
     // ---- init ----
