@@ -465,7 +465,7 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
     <div class="authcard">
       <div class="brandwrap"><?= identity_logo('brandlogo') ?></div>
       <h1 class="authtitle">Production blueprint</h1>
-      <p class="sub">Welcome! Sign in to help shape how the bus, truck &amp; tipper build system will work.</p>
+      <p class="sub">Welcome! Sign in to help shape how the bus &amp; truck build system will work.</p>
       <div class="stages" aria-hidden="true">
         <div class="track"><div class="fill"></div></div>
         <div class="dots">
@@ -498,7 +498,7 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
         <div>
           <div class="hlogo"><?= identity_logo('hlogoimg') ?></div>
           <div class="eyebrow">Identity Auto Fabricators Limited</div>
-          <h1>Bus, truck &amp; tipper build — production blueprint</h1>
+          <h1>Bus &amp; truck build — production blueprint</h1>
           <p>Please review each part of the proposed system. Edit anything that is wrong, mark whether you approve or want a change, then press <b>Save</b> at the bottom. Your notes go straight to the developer.</p>
         </div>
         <div style="text-align:right;white-space:nowrap">
