@@ -81,6 +81,22 @@ function bp_changes($old, $new) {
     return $out;
 }
 
+/** Identity Auto logo: real logo.png if present, otherwise a vector recreation. */
+function identity_logo($class = '') {
+    $c = $class ? ' class="' . $class . '"' : '';
+    if (is_file(__DIR__ . '/logo.png')) {
+        return '<img src="logo.png" alt="Identity Auto Fabricators Limited"' . $c . '>';
+    }
+    return '<svg' . $c . ' viewBox="0 0 300 120" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Identity Auto Fabricators Limited">'
+        . '<rect x="6" y="6" width="288" height="80" rx="12" fill="#ED1C24"/>'
+        . '<rect x="8" y="8" width="284" height="76" rx="10" fill="none" stroke="#ffffff" stroke-width="2.5"/>'
+        . '<text x="150" y="51" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-style="italic" font-size="42" fill="#ffffff" letter-spacing="1" textLength="240" lengthAdjust="spacingAndGlyphs">IDENTITY</text>'
+        . '<rect x="24" y="60" width="252" height="20" rx="3" fill="#15239B"/>'
+        . '<text x="150" y="74.5" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="12" fill="#ffffff" letter-spacing="2" textLength="232" lengthAdjust="spacingAndGlyphs">AUTO FABRICATORS LIMITED</text>'
+        . '<text x="150" y="106" text-anchor="middle" font-family="Georgia,\'Times New Roman\',serif" font-style="italic" font-size="15" fill="#111111">Bus, Trucks, &amp; Tipper Fabricators</text>'
+        . '</svg>';
+}
+
 if (empty($_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(16));
 $csrf   = $_SESSION['csrf'];
 $action = $_GET['action'] ?? '';
@@ -170,7 +186,7 @@ if ($action === 'logs') {
     function when($iso) { $t = strtotime($iso); return $t ? date('j M Y, g:i:s a', $t) : h($iso); }
     ?><!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Activity logs — admin</title>
+    <title>Activity logs — Identity Auto Fabricators</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
       *{box-sizing:border-box} body{margin:0;font-family:'Inter',system-ui,Arial,sans-serif;background:#f4f6fb;color:#16202e;line-height:1.6}
@@ -198,7 +214,8 @@ if ($action === 'logs') {
       .chg::before{content:"›";position:absolute;left:2px;color:#1f6feb;font-weight:700}
       .who{display:inline-block;font-size:12px;font-weight:600;background:#e9f1ff;color:#13427e;border-radius:20px;padding:1px 9px}
     </style></head><body>
-    <div class="top"><div class="wrap"><h1>Activity logs</h1><a href="blueprint.php">← Back to blueprint</a></div></div>
+    <div class="top"><div class="wrap"><div><div style="background:#fff;border-radius:10px;padding:6px 10px;display:inline-block;margin-bottom:8px"><?= identity_logo('hlogoimg') ?></div><h1>Activity logs</h1></div><a href="blueprint.php">← Back to blueprint</a></div></div>
+    <style>.top .hlogoimg{width:150px;height:auto;display:block}</style>
     <div class="wrap">
       <div class="card">
         <h2>Change map (<?= count($changesLog) ?> updates)</h2>
@@ -297,7 +314,7 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Production System Blueprint — Bus &amp; Truck Body Build</title>
+<title>Identity Auto Fabricators — Production Blueprint</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -317,7 +334,9 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
   .eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;opacity:.82;font-weight:600}
   .top h1{margin:.35rem 0 .5rem;font-size:27px;font-weight:700;letter-spacing:-.01em}
   .top p{margin:0;opacity:.92;max-width:60ch}
-  .top .bar{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
+  .top .bar{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap}
+  .hlogo{display:inline-block;background:#fff;border-radius:11px;padding:8px 12px;margin-bottom:12px;box-shadow:0 6px 16px rgba(8,18,40,.25)}
+  .hlogoimg{width:172px;height:auto;display:block}
   .logout{color:#fff;border:1px solid rgba(255,255,255,.45);padding:7px 13px;border-radius:9px;text-decoration:none;font-size:13px;font-weight:500;white-space:nowrap}
   .logout:hover{background:rgba(255,255,255,.14)}
   /* cards */
@@ -389,13 +408,11 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
   .authcard{position:relative;z-index:2;width:100%;max-width:400px;background:rgba(255,255,255,.96);border-radius:22px;
     padding:30px 30px 24px;box-shadow:0 24px 70px rgba(8,18,40,.45);animation:rise .7s cubic-bezier(.2,.8,.2,1) both;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
   @keyframes rise{from{opacity:0;transform:translateY(28px) scale(.97)}to{opacity:1;transform:none}}
-  .brandrow{display:flex;align-items:center;gap:13px;margin-bottom:4px}
-  .logo{width:50px;height:50px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:26px;
-    background:linear-gradient(135deg,#1f6feb,#0f9d76);box-shadow:0 8px 20px rgba(31,111,235,.4);animation:bob 3s ease-in-out infinite}
-  @keyframes bob{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-5px) rotate(3deg)}}
-  .kicker{font-size:11px;letter-spacing:.16em;text-transform:uppercase;font-weight:700;color:#1f6feb}
-  .authcard h1{margin:2px 0 0;font-size:22px;font-weight:700;background:linear-gradient(90deg,#13427e,#0f9d76,#b9760f);-webkit-background-clip:text;background-clip:text;color:transparent}
-  .sub{color:#5b6b80;font-size:14px;margin:8px 0 18px}
+  .brandwrap{text-align:center;margin-bottom:10px;animation:bob 4s ease-in-out infinite}
+  @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+  .brandlogo{width:212px;max-width:78%;height:auto;display:block;margin:0 auto}
+  .authtitle{text-align:center;margin:0;font-size:20px;font-weight:700;background:linear-gradient(90deg,#13427e,#0f9d76,#b9760f);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{color:#5b6b80;font-size:14px;margin:8px 0 18px;text-align:center}
   .stages{margin:0 0 22px}
   .track{position:relative;height:7px;border-radius:6px;background:#eef2f8;overflow:hidden}
   .fill{position:absolute;top:0;bottom:0;left:0;right:100%;border-radius:6px;background:linear-gradient(90deg,#1f6feb,#34d1bf,#ffd166,#ff5d8f,#8a5cff);background-size:200% 100%;animation:fillbar 4s ease-in-out infinite,hue 4s linear infinite}
@@ -446,14 +463,9 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
   <div class="authpage">
     <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="blob b4"></div>
     <div class="authcard">
-      <div class="brandrow">
-        <div class="logo">🚌</div>
-        <div>
-          <div class="kicker">Nine One Two · Bodyworks</div>
-          <h1>Production blueprint</h1>
-        </div>
-      </div>
-      <p class="sub">Welcome! Sign in to help shape how the bus &amp; truck build system will work.</p>
+      <div class="brandwrap"><?= identity_logo('brandlogo') ?></div>
+      <h1 class="authtitle">Production blueprint</h1>
+      <p class="sub">Welcome! Sign in to help shape how the bus, truck &amp; tipper build system will work.</p>
       <div class="stages" aria-hidden="true">
         <div class="track"><div class="fill"></div></div>
         <div class="dots">
@@ -484,8 +496,9 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
     <div class="wrap">
       <div class="bar">
         <div>
-          <div class="eyebrow">Production system · blueprint for review</div>
-          <h1>Bus &amp; truck body build</h1>
+          <div class="hlogo"><?= identity_logo('hlogoimg') ?></div>
+          <div class="eyebrow">Identity Auto Fabricators Limited</div>
+          <h1>Bus, truck &amp; tipper build — production blueprint</h1>
           <p>Please review each part of the proposed system. Edit anything that is wrong, mark whether you approve or want a change, then press <b>Save</b> at the bottom. Your notes go straight to the developer.</p>
         </div>
         <div style="text-align:right;white-space:nowrap">
@@ -525,7 +538,7 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
       <h2>Your details</h2>
       <p class="lead">So we know who reviewed this.</p>
       <div class="grid2">
-        <div><label class="fld">Business / shop name</label><input type="text" name="client_name" placeholder="e.g. Acme Body Builders"></div>
+        <div><label class="fld">Business / shop name</label><input type="text" name="client_name" value="Identity Auto Fabricators Limited"></div>
         <div><label class="fld">Your name &amp; role</label><input type="text" name="reviewer" placeholder="e.g. John, Workshop Manager"></div>
       </div>
     </div>
