@@ -97,6 +97,52 @@ function identity_logo($class = '') {
         . '</svg>';
 }
 
+/** Render saved answers as inline-styled HTML (used for the print page and the email). */
+function bp_summary_html($data) {
+    $f = is_array($data['fields'] ?? null) ? $data['fields'] : [];
+    $e = function ($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); };
+    $verdict = function ($v) {
+        if ($v === 'approve') return '<span style="color:#0c7a5c;font-weight:600">Looks right / Agree</span>';
+        if ($v === 'change')  return '<span style="color:#9a5e08;font-weight:600">Needs a change</span>';
+        return '<span style="color:#999">Not answered</span>';
+    };
+    $out = '';
+    $rows = function ($keys) use (&$out, $f, $e, $verdict) {
+        $out .= '<table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px;margin:0 0 4px">';
+        foreach ($keys as $k) {
+            $note = trim((string)($f[$k . '_note'] ?? ''));
+            $out .= '<tr><td style="padding:7px 8px;border-bottom:1px solid #eee;vertical-align:top;width:42%">' . $e(bp_field_label($k . '_v')) . '</td>'
+                . '<td style="padding:7px 8px;border-bottom:1px solid #eee;vertical-align:top">' . $verdict($f[$k . '_v'] ?? '')
+                . ($note !== '' ? '<div style="color:#555;margin-top:3px">&ldquo;' . $e($note) . '&rdquo;</div>' : '') . '</td></tr>';
+        }
+        $out .= '</table>';
+    };
+    $head = function ($t) use (&$out) { $out .= '<h3 style="font-family:Arial,sans-serif;font-size:15px;color:#13427e;margin:20px 0 6px">' . $t . '</h3>'; };
+    $stages = function ($t, $list) use (&$out, $e) {
+        $out .= '<h3 style="font-family:Arial,sans-serif;font-size:15px;color:#13427e;margin:20px 0 6px">' . $t . '</h3>';
+        if (!$list) { $out .= '<p style="font-family:Arial,sans-serif;font-size:13px;color:#999">No sections.</p>'; return; }
+        $out .= '<table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">'
+            . '<tr><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #ddd">#</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #ddd">Section</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #ddd">QC gate</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #ddd">What happens</th></tr>';
+        $i = 1;
+        foreach ($list as $r) {
+            $out .= '<tr><td style="padding:6px 8px;border-bottom:1px solid #eee">' . $i++ . '</td>'
+                . '<td style="padding:6px 8px;border-bottom:1px solid #eee;font-weight:600">' . $e($r['name'] ?? '') . '</td>'
+                . '<td style="padding:6px 8px;border-bottom:1px solid #eee">' . (!empty($r['qc']) ? 'Yes' : '&mdash;') . '</td>'
+                . '<td style="padding:6px 8px;border-bottom:1px solid #eee;color:#555">' . $e($r['notes'] ?? '') . '</td></tr>';
+        }
+        $out .= '</table>';
+    };
+    $head('The workflow'); $rows(['ph1', 'ph2', 'ph3', 'ph4', 'ph5', 'ph6']);
+    $head('Key decisions'); $rows(['d1', 'd2', 'd3', 'd4']);
+    $stages('Bus build &mdash; sections', $data['busStages'] ?? []);
+    $stages('Truck build &mdash; sections', $data['truckStages'] ?? []);
+    $missed = trim((string)($f['missed'] ?? ''));
+    $head('Other notes');
+    $out .= '<p style="font-family:Arial,sans-serif;font-size:13px;color:#333;white-space:pre-wrap">' . ($missed !== '' ? $e($missed) : '<span style="color:#999">None</span>') . '</p>'
+        . '<p style="font-family:Arial,sans-serif;font-size:13px"><b>Overall:</b> ' . $verdict($f['signoff_v'] ?? '') . ' &nbsp; <b>Date:</b> ' . $e($f['signoff_date'] ?? '') . '</p>';
+    return $out;
+}
+
 if (empty($_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(16));
 $csrf   = $_SESSION['csrf'];
 $action = $_GET['action'] ?? '';
@@ -170,6 +216,54 @@ if ($action === 'export') {
     header('Content-Type: application/octet-stream');
     header('Content-Disposition: attachment; filename="' . $name . '"');
     if (is_file($file)) readfile($file); else echo ($what === 'input') ? '{}' : '';
+    exit;
+}
+
+// ---- printable answers (any signed-in user) ----
+if ($action === 'print') {
+    if (empty($_SESSION['bp_auth'])) { header('Location: blueprint.php'); exit; }
+    $data = [];
+    if (is_file($DATA_FILE)) { $j = json_decode(file_get_contents($DATA_FILE), true); if (is_array($j)) $data = $j['data'] ?? []; }
+    $by = $_SESSION['bp_name'] ?? '';
+    ?><!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Blueprint answers — Identity Auto Fabricators</title>
+    <style>
+      body{font-family:Arial,Helvetica,sans-serif;color:#16202e;max-width:780px;margin:0 auto;padding:24px}
+      .head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;border-bottom:2px solid #eee;padding-bottom:14px;margin-bottom:6px}
+      .head h1{font-size:20px;margin:10px 0 2px} .meta{color:#666;font-size:12px}
+      .printlogo{width:200px;height:auto;display:block}
+      .pbtn{background:#1f6feb;color:#fff;border:none;border-radius:8px;padding:9px 16px;font-size:14px;cursor:pointer;white-space:nowrap}
+      @media print{.noprint{display:none}body{padding:0}}
+    </style></head><body>
+      <div class="head">
+        <div><?= identity_logo('printlogo') ?><h1>Production blueprint &mdash; answers</h1>
+          <div class="meta">Reviewed by <?= h($by) ?> &middot; printed <?= date('j M Y, g:i a') ?></div></div>
+        <button class="pbtn noprint" onclick="window.print()">Print / Save as PDF</button>
+      </div>
+      <?= bp_summary_html($data) ?>
+      <script>window.onload=function(){setTimeout(function(){window.print();},350);};</script>
+    </body></html><?php
+    exit;
+}
+
+// ---- email a copy to the user ----
+if ($action === 'email') {
+    header('Content-Type: application/json');
+    if (!$authed) { http_response_code(401); echo json_encode(['ok' => false, 'error' => 'Please log in again.']); exit; }
+    $body = json_decode(file_get_contents('php://input'), true);
+    if (!is_array($body) || !hash_equals($csrf, (string)($body['csrf'] ?? ''))) { http_response_code(400); echo json_encode(['ok' => false, 'error' => 'Session expired — reload the page.']); exit; }
+    $to = filter_var(trim((string)($body['to'] ?? '')), FILTER_VALIDATE_EMAIL);
+    if (!$to) { echo json_encode(['ok' => false, 'error' => 'That email address looks invalid.']); exit; }
+    $data = [];
+    if (is_file($DATA_FILE)) { $j = json_decode(file_get_contents($DATA_FILE), true); if (is_array($j)) $data = $j['data'] ?? []; }
+    $html = '<div style="max-width:700px;margin:auto">'
+        . '<h2 style="font-family:Arial,sans-serif;color:#13427e;margin-bottom:2px">Identity Auto Fabricators &mdash; your blueprint answers</h2>'
+        . '<p style="font-family:Arial,sans-serif;font-size:12px;color:#666">Reviewed by ' . h($_SESSION['bp_name'] ?? '') . ' &middot; ' . date('j M Y, g:i a') . '</p>'
+        . bp_summary_html($data) . '</div>';
+    $headers = "MIME-Version: 1.0\r\n" . "Content-Type: text/html; charset=UTF-8\r\n" . "From: Identity Blueprint <no-reply@nineonetwo.online>\r\n";
+    $sent = @mail($to, 'Your Identity Auto production blueprint answers', $html, $headers);
+    bp_log($ACT_FILE, ['at' => date('c'), 'user' => $_SESSION['bp_user'] ?? '', 'name' => $_SESSION['bp_name'] ?? '', 'action' => $sent ? 'email' : 'email-failed', 'ip' => bp_ip(), 'to' => $to]);
+    echo json_encode($sent ? ['ok' => true] : ['ok' => false, 'error' => 'The server could not send the email. Please use Download PDF instead.']);
     exit;
 }
 
@@ -494,6 +588,11 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
   .sectlabel{display:flex;align-items:center;gap:7px} .sectlabel .lucide{width:15px;height:15px}
   .ritag .lucide{width:14px;height:14px;margin-right:5px}
   .foot{display:flex;align-items:center;justify-content:center;gap:6px} .foot .lucide{width:14px;height:14px}
+  .copyrow{display:flex;gap:10px;flex-wrap:wrap;margin-top:2px}
+  .btn.sec{background:#fff;color:var(--accent-d);border:1px solid #cfe0fb;box-shadow:none}
+  .btn.sec:hover{background:#eef5ff}
+  .h2lucide h2{display:flex;align-items:center;gap:8px}
+  .card h2 .lucide{width:18px;height:18px;color:#1f6feb}
 </style>
 </head>
 <body>
@@ -648,6 +747,15 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
       </div>
     </div>
 
+    <div class="card">
+      <h2><i data-lucide="file-down"></i> Keep a copy of your answers</h2>
+      <p class="lead">We'll save your latest answers first, then you can download a PDF or email yourself a copy.</p>
+      <div class="copyrow">
+        <button class="btn sec" id="pdfBtn" type="button"><i data-lucide="file-text"></i> Download PDF</button>
+        <button class="btn sec" id="emailBtn" type="button"><i data-lucide="mail"></i> Email me a copy</button>
+      </div>
+    </div>
+
     <div class="celebrate" id="celebrate"><i data-lucide="party-popper"></i> <b>All reviewed — nicely done!</b> Press <b>Save my changes</b> to send it to the developer. You can still come back and edit anything later.</div>
 
   </div>
@@ -797,10 +905,9 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
     document.addEventListener('input', ()=>{ markDirty(); updateProgress(); });
     document.addEventListener('change', ()=>{ paintSegs(); markDirty(); updateProgress(); });
 
-    // ---- save ----
-    const btn = document.getElementById('saveBtn');
-    btn.onclick = async ()=>{
-      saving=true; btn.disabled=true; const old=btn.innerHTML; btn.textContent='Saving…';
+    // ---- save (reusable) ----
+    async function doSave(silent){
+      saving = true;
       try{
         const res = await fetch('blueprint.php?action=save', {
           method:'POST', headers:{'Content-Type':'application/json'},
@@ -809,12 +916,41 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
         const j = await res.json();
         if(j.ok){
           dirty=false; try{ localStorage.removeItem(LSKEY); }catch(e){}
-          toast('Saved — thank you! The developer can now see your input.');
           setStatus('✓ All changes saved', '#0c7a5c');
-        } else { toast(j.error || 'Could not save.', true); }
-      }catch(e){ toast('Network error — please try again.', true); }
-      saving=false; btn.disabled=false; btn.innerHTML=old; icons();
-    };
+          if(!silent) toast('Saved — thank you! The developer can now see your input.');
+          return true;
+        }
+        toast(j.error || 'Could not save.', true); return false;
+      }catch(e){ toast('Network error — please try again.', true); return false; }
+      finally{ saving = false; }
+    }
+    async function withBusy(b, label, fn){
+      b.disabled = true; const old = b.innerHTML; b.textContent = label;
+      try{ await fn(); } finally { b.disabled = false; b.innerHTML = old; icons(); }
+    }
+    const btn = document.getElementById('saveBtn');
+    btn.onclick = ()=> withBusy(btn, 'Saving…', ()=> doSave(false));
+
+    // ---- download PDF (print) ----
+    document.getElementById('pdfBtn').onclick = ()=> withBusy(document.getElementById('pdfBtn'), 'Preparing…', async ()=>{
+      if(await doSave(true)) window.open('blueprint.php?action=print', '_blank');
+    });
+
+    // ---- email a copy ----
+    document.getElementById('emailBtn').onclick = ()=> withBusy(document.getElementById('emailBtn'), 'Sending…', async ()=>{
+      const to = (prompt('Enter your email address to receive a copy of your answers:') || '').trim();
+      if(!to) return;
+      if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)){ toast('That email looks invalid.', true); return; }
+      if(!await doSave(true)) return;
+      try{
+        const res = await fetch('blueprint.php?action=email', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({csrf:CSRF, to})
+        });
+        const j = await res.json();
+        toast(j.ok ? ('Sent to '+to+' — check your inbox.') : (j.error || 'Could not send email.'), !j.ok);
+      }catch(e){ toast('Network error — could not send.', true); }
+    });
 
     // ---- init ----
     let initial = SAVED, restored = false;
