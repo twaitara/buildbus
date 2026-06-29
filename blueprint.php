@@ -45,6 +45,11 @@ function bp_touch($file, $user) {
     $dir = dirname($file); if (!is_dir($dir)) @mkdir($dir, 0775, true);
     @file_put_contents($file, json_encode($p));
 }
+function bp_untouch($file, $user) {
+    if (!$user) return;
+    $p = bp_presence_read($file);
+    if (isset($p[$user])) { unset($p[$user]); @file_put_contents($file, json_encode($p)); }
+}
 /** Presence of all users except $self: [user, name, online, secs]. */
 function bp_presence_others($file, $users, $self) {
     $p = bp_presence_read($file); $now = time(); $out = [];
@@ -178,6 +183,7 @@ $authed = !empty($_SESSION['bp_auth']);
 if ($action === 'logout') {
     if (!empty($_SESSION['bp_auth'])) {
         bp_log($ACT_FILE, ['at' => date('c'), 'user' => $_SESSION['bp_user'] ?? '', 'name' => $_SESSION['bp_name'] ?? '', 'action' => 'logout', 'ip' => bp_ip()]);
+        bp_untouch($PRES_FILE, $_SESSION['bp_user'] ?? '');
     }
     $_SESSION = [];
     session_destroy();
@@ -252,6 +258,12 @@ if ($action === 'ping') {
     bp_touch($PRES_FILE, $_SESSION['bp_user'] ?? '');
     echo json_encode(['ok' => true, 'users' => bp_presence_others($PRES_FILE, $users, $_SESSION['bp_user'] ?? '')]);
     exit;
+}
+
+// ---- presence: mark offline (sent on tab close via beacon) ----
+if ($action === 'offline') {
+    if ($authed) bp_untouch($PRES_FILE, $_SESSION['bp_user'] ?? '');
+    header('Content-Type: application/json'); echo json_encode(['ok' => true]); exit;
 }
 
 // ---- printable answers (any signed-in user) ----
@@ -1031,7 +1043,10 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
       });
     }
     async function ping(){ try{ const r=await fetch('blueprint.php?action=ping',{cache:'no-store'}); const j=await r.json(); if(j.ok) updatePresence(j.users); }catch(e){} }
-    ping(); setInterval(ping, 25000);
+    function goOffline(){ try{ if(navigator.sendBeacon) navigator.sendBeacon('blueprint.php?action=offline'); else fetch('blueprint.php?action=offline',{keepalive:true}); }catch(e){} }
+    window.addEventListener('pagehide', goOffline);
+    document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible') ping(); });
+    ping(); setInterval(ping, 20000);
   </script>
 
 <?php endif; ?>
