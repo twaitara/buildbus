@@ -6,11 +6,14 @@
  */
 session_start();
 
-// ---- credentials (override via secret.php) ----
-$creds = ['user' => 'client', 'pass' => 'CHANGE_ME_NOW'];
+// ---- users (override via secret.php) ----
+$users = [
+    ['user' => 'tito', 'pass' => 'CHANGE_ME_DEV', 'name' => 'Tito (developer)'],
+    ['user' => 'ann',  'pass' => 'CHANGE_ME_ANN', 'name' => 'Ann'],
+];
 if (is_file(__DIR__ . '/secret.php')) {
     $s = require __DIR__ . '/secret.php';
-    if (is_array($s)) $creds = array_merge($creds, $s);
+    if (is_array($s) && !empty($s['users']) && is_array($s['users'])) $users = $s['users'];
 }
 
 $DATA_DIR  = __DIR__ . '/data';
@@ -33,14 +36,18 @@ if ($action === 'logout') {
 // ---- login ----
 $loginError = '';
 if ($action === 'login' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    $u = (string)($_POST['username'] ?? '');
-    $p = (string)($_POST['password'] ?? '');
-    if (hash_equals((string)$creds['user'], $u) && hash_equals((string)$creds['pass'], $p)) {
-        session_regenerate_id(true);
-        $_SESSION['bp_auth'] = true;
-        $_SESSION['csrf'] = bin2hex(random_bytes(16));
-        header('Location: blueprint.php');
-        exit;
+    $inU = (string)($_POST['username'] ?? '');
+    $inP = (string)($_POST['password'] ?? '');
+    foreach ($users as $u) {
+        if (hash_equals((string)$u['user'], $inU) && hash_equals((string)$u['pass'], $inP)) {
+            session_regenerate_id(true);
+            $_SESSION['bp_auth'] = true;
+            $_SESSION['bp_user'] = $u['user'];
+            $_SESSION['bp_name'] = $u['name'] ?? $u['user'];
+            $_SESSION['csrf'] = bin2hex(random_bytes(16));
+            header('Location: blueprint.php');
+            exit;
+        }
     }
     $loginError = 'Wrong username or password.';
 }
@@ -54,7 +61,7 @@ if ($action === 'save') {
         http_response_code(400); echo json_encode(['ok' => false, 'error' => 'Session expired — reload the page.']); exit;
     }
     if (!is_dir($DATA_DIR)) @mkdir($DATA_DIR, 0775, true);
-    $record = ['saved_at' => date('c'), 'data' => $body['data'] ?? []];
+    $record = ['saved_at' => date('c'), 'by' => ($_SESSION['bp_name'] ?? 'unknown'), 'data' => $body['data'] ?? []];
     file_put_contents($DATA_FILE, json_encode($record, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
     file_put_contents($HIST_FILE, json_encode($record, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND);
     echo json_encode(['ok' => true, 'saved_at' => $record['saved_at']]);
@@ -228,7 +235,10 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
           <h1>Bus &amp; truck body build</h1>
           <p>Please review each part of the proposed system. Edit anything that is wrong, mark whether you approve or want a change, then press <b>Save</b> at the bottom. Your notes go straight to the developer.</p>
         </div>
-        <a class="logout" href="blueprint.php?action=logout">Sign out</a>
+        <div style="text-align:right;white-space:nowrap">
+          <div style="font-size:12px;opacity:.85;margin-bottom:6px">Signed in as <?= h($_SESSION['bp_name'] ?? '') ?></div>
+          <a class="logout" href="blueprint.php?action=logout">Sign out</a>
+        </div>
       </div>
     </div>
   </div>
