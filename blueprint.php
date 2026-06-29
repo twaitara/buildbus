@@ -27,6 +27,7 @@ $HIST_FILE = $DATA_DIR . '/blueprint_history.jsonl';
 $ACT_FILE  = $DATA_DIR . '/activity.jsonl';
 $CHG_FILE  = $DATA_DIR . '/changes.jsonl';
 $PRES_FILE = $DATA_DIR . '/presence.json';
+$SESS_FILE = $DATA_DIR . '/sessions.jsonl';
 const BP_ONLINE_SECS = 75; // treat as "online" if seen within this many seconds
 
 /** Append one JSON line to a log file. */
@@ -39,7 +40,7 @@ function bp_ip() { return $_SERVER['REMOTE_ADDR'] ?? ''; }
 
 /** Read/update the presence map (username => last-seen unix time). */
 function bp_presence_read($file) { $p = is_file($file) ? json_decode(file_get_contents($file), true) : []; return is_array($p) ? $p : []; }
-function bp_touch($file, $user) {
+function bp_touch($file, $user, $name = '') {
     if (!$user) return;
     $p = bp_presence_read($file); $now = time();
     $prev = $p[$user] ?? null;
@@ -47,14 +48,36 @@ function bp_touch($file, $user) {
     $prevSince = is_array($prev) ? (int)($prev['since'] ?? $prevSeen) : (int)$prev;
     // keep the same session if last seen recently, else start a new one
     $since = ($prevSeen && ($now - $prevSeen) <= BP_ONLINE_SECS && $prevSince) ? $prevSince : $now;
-    $p[$user] = ['seen' => $now, 'since' => $since];
+    $p[$user] = ['seen' => $now, 'since' => $since, 'name' => $name ?: (is_array($prev) ? ($prev['name'] ?? $user) : $user)];
     $dir = dirname($file); if (!is_dir($dir)) @mkdir($dir, 0775, true);
     @file_put_contents($file, json_encode($p));
 }
-function bp_untouch($file, $user) {
+/** Finalize and log a user's session, then drop them from presence. */
+function bp_end_session($presFile, $sessFile, $user, $reason) {
     if (!$user) return;
-    $p = bp_presence_read($file);
-    if (isset($p[$user])) { unset($p[$user]); @file_put_contents($file, json_encode($p)); }
+    $p = bp_presence_read($presFile);
+    $rec = $p[$user] ?? null;
+    if (is_array($rec)) {
+        $seen = (int)($rec['seen'] ?? 0); $since = (int)($rec['since'] ?? $seen); $name = $rec['name'] ?? $user;
+        $end = ($reason === 'timeout') ? $seen : time();
+        if ($since) bp_log($sessFile, ['user' => $user, 'name' => $name, 'start' => date('c', $since), 'end' => date('c', $end), 'secs' => max(0, $end - $since), 'ended' => $reason]);
+    }
+    if (isset($p[$user])) { unset($p[$user]); @file_put_contents($presFile, json_encode($p)); }
+}
+/** Close out any sessions that have gone stale (network drop / no proper close). */
+function bp_sweep($presFile, $sessFile) {
+    $p = bp_presence_read($presFile); if (!$p) return;
+    $now = time(); $changed = false;
+    foreach ($p as $user => $rec) {
+        $seen = is_array($rec) ? (int)($rec['seen'] ?? 0) : (int)$rec;
+        if ($seen && ($now - $seen) > BP_ONLINE_SECS) {
+            $since = is_array($rec) ? (int)($rec['since'] ?? $seen) : (int)$rec;
+            $name  = is_array($rec) ? ($rec['name'] ?? $user) : $user;
+            if ($since) bp_log($sessFile, ['user' => $user, 'name' => $name, 'start' => date('c', $since), 'end' => date('c', $seen), 'secs' => max(0, $seen - $since), 'ended' => 'timeout']);
+            unset($p[$user]); $changed = true;
+        }
+    }
+    if ($changed) @file_put_contents($presFile, json_encode($p));
 }
 /** Presence of all users except $self: [user, name, online, secs, online_for]. */
 function bp_presence_others($file, $users, $self) {
@@ -75,7 +98,7 @@ function bp_presence_others($file, $users, $self) {
 /** "12 min", "1h 5m", "just now". */
 function bp_dur($s) {
     if ($s === null) return '';
-    if ($s < 60) return 'just now';
+    if ($s < 60) return 'under a min';
     $m = intdiv($s, 60); if ($m < 60) return $m . ' min';
     $h = intdiv($m, 60); $m %= 60; return $h . 'h' . ($m ? ' ' . $m . 'm' : '');
 }
@@ -202,7 +225,7 @@ $authed = !empty($_SESSION['bp_auth']);
 if ($action === 'logout') {
     if (!empty($_SESSION['bp_auth'])) {
         bp_log($ACT_FILE, ['at' => date('c'), 'user' => $_SESSION['bp_user'] ?? '', 'name' => $_SESSION['bp_name'] ?? '', 'action' => 'logout', 'ip' => bp_ip()]);
-        bp_untouch($PRES_FILE, $_SESSION['bp_user'] ?? '');
+        bp_end_session($PRES_FILE, $SESS_FILE, $_SESSION['bp_user'] ?? '', 'logout');
     }
     $_SESSION = [];
     session_destroy();
@@ -260,7 +283,7 @@ if ($action === 'save') {
 if ($action === 'export') {
     if (empty($_SESSION['bp_auth']) || ($_SESSION['bp_role'] ?? '') !== 'admin') { http_response_code(403); echo 'Forbidden — admins only.'; exit; }
     $what = $_GET['what'] ?? 'input';
-    $map = ['input' => $DATA_FILE, 'history' => $HIST_FILE, 'changes' => $CHG_FILE, 'activity' => $ACT_FILE];
+    $map = ['input' => $DATA_FILE, 'history' => $HIST_FILE, 'changes' => $CHG_FILE, 'activity' => $ACT_FILE, 'sessions' => $SESS_FILE];
     $file = $map[$what] ?? $DATA_FILE;
     $ext  = ($what === 'input') ? 'json' : 'jsonl';
     $name = 'identity-blueprint-' . preg_replace('/[^a-z]/', '', $what) . '-' . date('Ymd-His') . '.' . $ext;
@@ -274,14 +297,15 @@ if ($action === 'export') {
 if ($action === 'ping') {
     header('Content-Type: application/json');
     if (!$authed) { echo json_encode(['ok' => false]); exit; }
-    bp_touch($PRES_FILE, $_SESSION['bp_user'] ?? '');
+    bp_sweep($PRES_FILE, $SESS_FILE);
+    bp_touch($PRES_FILE, $_SESSION['bp_user'] ?? '', $_SESSION['bp_name'] ?? '');
     echo json_encode(['ok' => true, 'users' => bp_presence_others($PRES_FILE, $users, $_SESSION['bp_user'] ?? '')]);
     exit;
 }
 
 // ---- presence: mark offline (sent on tab close via beacon) ----
 if ($action === 'offline') {
-    if ($authed) bp_untouch($PRES_FILE, $_SESSION['bp_user'] ?? '');
+    if ($authed) bp_end_session($PRES_FILE, $SESS_FILE, $_SESSION['bp_user'] ?? '', 'closed');
     header('Content-Type: application/json'); echo json_encode(['ok' => true]); exit;
 }
 
@@ -338,6 +362,13 @@ if ($action === 'logs') {
     if (empty($_SESSION['bp_auth'])) { header('Location: blueprint.php'); exit; }
     if (($_SESSION['bp_role'] ?? '') !== 'admin') { http_response_code(403); echo 'Forbidden — admins only.'; exit; }
 
+    bp_sweep($PRES_FILE, $SESS_FILE);
+    $sessions = [];
+    if (is_file($SESS_FILE)) {
+        foreach (array_reverse(array_filter(explode("\n", file_get_contents($SESS_FILE)))) as $ln) {
+            $e = json_decode($ln, true); if (is_array($e)) $sessions[] = $e;
+        }
+    }
     $activity = [];
     if (is_file($ACT_FILE)) {
         foreach (array_reverse(array_filter(explode("\n", file_get_contents($ACT_FILE)))) as $ln) {
@@ -401,6 +432,7 @@ if ($action === 'logs') {
         <a class="dlbtn" href="blueprint.php?action=export&what=input"><i data-lucide="download"></i> Download answers (JSON)</a>
         <a class="dlbtn alt" href="blueprint.php?action=export&what=changes"><i data-lucide="history"></i> Download change log</a>
         <a class="dlbtn alt" href="blueprint.php?action=export&what=activity"><i data-lucide="activity"></i> Download activity</a>
+        <a class="dlbtn alt" href="blueprint.php?action=export&what=sessions"><i data-lucide="clock"></i> Download sessions</a>
       </div>
       <div class="card">
         <h2>Change map (<?= count($changesLog) ?> updates)</h2>
@@ -417,6 +449,23 @@ if ($action === 'logs') {
             </div>
           <?php endforeach; ?>
         </div>
+        <?php endif; ?>
+      </div>
+      <div class="card">
+        <h2>Work sessions (<?= count($sessions) ?>)</h2>
+        <p class="muted">When each person was signed in and for how long — newest first.</p>
+        <?php if (!$sessions): ?><div class="empty">No completed sessions yet. A session is recorded when someone signs out, closes the tab, or goes idle.</div><?php else: ?>
+        <table><thead><tr><th>Who</th><th>Started</th><th>Ended</th><th>Duration</th><th>How it ended</th></tr></thead><tbody>
+        <?php foreach ($sessions as $sx): $endReason = $sx['ended'] ?? ''; ?>
+          <tr>
+            <td style="font-weight:600"><?= h($sx['name'] ?? ($sx['user'] ?? '')) ?></td>
+            <td><?= when($sx['start'] ?? '') ?></td>
+            <td><?= when($sx['end'] ?? '') ?></td>
+            <td style="font-weight:600"><?= h(bp_dur((int)($sx['secs'] ?? 0))) ?></td>
+            <td><span class="tag" style="background:#eef2f8;color:#5b6b80"><?= h($endReason === 'logout' ? 'signed out' : ($endReason === 'closed' ? 'closed tab' : ($endReason === 'timeout' ? 'went idle' : $endReason))) ?></span></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody></table>
         <?php endif; ?>
       </div>
       <div class="card">
@@ -457,7 +506,8 @@ if ($action === 'logs') {
 // ---- presence: mark current user online, gather others (for admin) ----
 $presenceOthers = [];
 if ($authed) {
-    bp_touch($PRES_FILE, $_SESSION['bp_user'] ?? '');
+    bp_sweep($PRES_FILE, $SESS_FILE);
+    bp_touch($PRES_FILE, $_SESSION['bp_user'] ?? '', $_SESSION['bp_name'] ?? '');
     if (($_SESSION['bp_role'] ?? '') === 'admin') $presenceOthers = bp_presence_others($PRES_FILE, $users, $_SESSION['bp_user'] ?? '');
 }
 
