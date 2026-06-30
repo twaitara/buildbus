@@ -28,6 +28,8 @@ $ACT_FILE  = $DATA_DIR . '/activity.jsonl';
 $CHG_FILE  = $DATA_DIR . '/changes.jsonl';
 $PRES_FILE = $DATA_DIR . '/presence.json';
 $SESS_FILE = $DATA_DIR . '/sessions.jsonl';
+$UP_DIR    = $DATA_DIR . '/uploads';
+$DOC_FILE  = $DATA_DIR . '/documents.jsonl';
 const BP_ONLINE_SECS = 75; // treat as "online" if seen within this many seconds
 
 /** Append one JSON line to a log file. */
@@ -37,6 +39,13 @@ function bp_log($file, array $entry) {
     @file_put_contents($file, json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND);
 }
 function bp_ip() { return $_SERVER['REMOTE_ADDR'] ?? ''; }
+
+/** Ensure a folder exists and block direct web access to its files. */
+function bp_protect_dir($dir) {
+    if (!is_dir($dir)) @mkdir($dir, 0775, true);
+    $ht = $dir . '/.htaccess';
+    if (!is_file($ht)) @file_put_contents($ht, "<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\nOrder allow,deny\nDeny from all\n</IfModule>\n");
+}
 
 /** Read/update the presence map (username => last-seen unix time). */
 function bp_presence_read($file) { $p = is_file($file) ? json_decode(file_get_contents($file), true) : []; return is_array($p) ? $p : []; }
@@ -357,6 +366,246 @@ if ($action === 'email') {
     exit;
 }
 
+// ---- document upload ----
+if ($action === 'upload') {
+    header('Content-Type: application/json');
+    if (!$authed) { http_response_code(401); echo json_encode(['ok' => false, 'error' => 'Please log in again.']); exit; }
+    if (!hash_equals($csrf, (string)($_POST['csrf'] ?? ''))) { http_response_code(400); echo json_encode(['ok' => false, 'error' => 'Session expired — reload the page.']); exit; }
+    $err = $_FILES['file']['error'] ?? UPLOAD_ERR_NO_FILE;
+    if (empty($_FILES['file']) || $err !== UPLOAD_ERR_OK) {
+        $msg = ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE) ? 'That file is too large.' : 'No file was received.';
+        echo json_encode(['ok' => false, 'error' => $msg]); exit;
+    }
+    $tmp = $_FILES['file']['tmp_name'];
+    $size = (int)($_FILES['file']['size'] ?? 0);
+    if ($size > 25 * 1024 * 1024) { echo json_encode(['ok' => false, 'error' => 'File is too large (max 25 MB).']); exit; }
+    $mime = function_exists('finfo_open') ? finfo_file(finfo_open(FILEINFO_MIME_TYPE), $tmp) : ($_FILES['file']['type'] ?? '');
+    $allowed = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp', 'image/gif' => 'gif', 'image/heic' => 'heic', 'application/pdf' => 'pdf'];
+    if (!isset($allowed[$mime])) { echo json_encode(['ok' => false, 'error' => 'Only photos (JPG, PNG) and PDF files are allowed.']); exit; }
+    bp_protect_dir($DATA_DIR); bp_protect_dir($UP_DIR);
+    $id = bin2hex(random_bytes(8));
+    $stored = $id . '.' . $allowed[$mime];
+    if (!move_uploaded_file($tmp, $UP_DIR . '/' . $stored)) { echo json_encode(['ok' => false, 'error' => 'Could not save the file. Try again.']); exit; }
+    $rec = ['id' => $id, 'file' => $stored, 'name' => mb_substr((string)($_FILES['file']['name'] ?? 'file'), 0, 140),
+            'doctype' => mb_substr((string)($_POST['doctype'] ?? 'Other'), 0, 80), 'note' => mb_substr(trim((string)($_POST['note'] ?? '')), 0, 300),
+            'mime' => $mime, 'size' => $size, 'by' => $_SESSION['bp_name'] ?? '', 'user' => $_SESSION['bp_user'] ?? '', 'at' => date('c')];
+    bp_log($DOC_FILE, $rec);
+    bp_log($ACT_FILE, ['at' => date('c'), 'user' => $_SESSION['bp_user'] ?? '', 'name' => $_SESSION['bp_name'] ?? '', 'action' => 'upload', 'ip' => bp_ip(), 'doctype' => $rec['doctype']]);
+    echo json_encode(['ok' => true, 'doc' => $rec]); exit;
+}
+
+// ---- serve an uploaded file (auth-gated) ----
+if ($action === 'file') {
+    if (!$authed) { http_response_code(403); echo 'Forbidden'; exit; }
+    $id = preg_replace('/[^a-f0-9]/', '', (string)($_GET['id'] ?? ''));
+    $rec = null;
+    if ($id && is_file($DOC_FILE)) {
+        foreach (array_filter(explode("\n", file_get_contents($DOC_FILE))) as $ln) { $e = json_decode($ln, true); if (is_array($e) && ($e['id'] ?? '') === $id) $rec = $e; }
+    }
+    if (!$rec) { http_response_code(404); echo 'Not found'; exit; }
+    $path = $UP_DIR . '/' . $rec['file'];
+    if (!is_file($path)) { http_response_code(404); echo 'File missing'; exit; }
+    header('Content-Type: ' . $rec['mime']);
+    header('Content-Disposition: ' . ((($_GET['dl'] ?? '') === '1') ? 'attachment' : 'inline') . '; filename="' . preg_replace('/[\r\n"]/', '', $rec['name']) . '"');
+    header('Content-Length: ' . filesize($path));
+    header('X-Content-Type-Options: nosniff');
+    readfile($path); exit;
+}
+
+// ---- delete an uploaded document ----
+if ($action === 'docdelete') {
+    header('Content-Type: application/json');
+    if (!$authed) { http_response_code(401); echo json_encode(['ok' => false]); exit; }
+    $body = json_decode(file_get_contents('php://input'), true);
+    if (!is_array($body) || !hash_equals($csrf, (string)($body['csrf'] ?? ''))) { http_response_code(400); echo json_encode(['ok' => false, 'error' => 'Session expired.']); exit; }
+    $id = preg_replace('/[^a-f0-9]/', '', (string)($body['id'] ?? ''));
+    $kept = []; $removed = null;
+    if ($id && is_file($DOC_FILE)) {
+        foreach (array_filter(explode("\n", file_get_contents($DOC_FILE))) as $ln) {
+            $e = json_decode($ln, true); if (!is_array($e)) continue;
+            if (($e['id'] ?? '') === $id) $removed = $e; else $kept[] = $ln;
+        }
+    }
+    if ($removed) {
+        @unlink($UP_DIR . '/' . ($removed['file'] ?? ''));
+        file_put_contents($DOC_FILE, $kept ? implode("\n", $kept) . "\n" : '');
+        bp_log($ACT_FILE, ['at' => date('c'), 'user' => $_SESSION['bp_user'] ?? '', 'name' => $_SESSION['bp_name'] ?? '', 'action' => 'doc-delete', 'ip' => bp_ip()]);
+        echo json_encode(['ok' => true]); exit;
+    }
+    echo json_encode(['ok' => false, 'error' => 'Not found.']); exit;
+}
+
+// ---- documents page ----
+if ($action === 'docs') {
+    if (empty($_SESSION['bp_auth'])) { header('Location: blueprint.php'); exit; }
+    $docs = [];
+    if (is_file($DOC_FILE)) {
+        foreach (array_reverse(array_filter(explode("\n", file_get_contents($DOC_FILE)))) as $ln) { $e = json_decode($ln, true); if (is_array($e)) $docs[] = $e; }
+    }
+    $DOC_TYPES = ['Quotation / Estimate', 'Proforma Invoice', 'Sales Order', 'Vehicle Specification Sheet', 'Tax Invoice', 'Receipt',
+        'Credit / Debit Note', 'Customer Statement', 'Delivery Note', 'Handover / Gate Pass', 'Warranty Certificate', 'Certificate of Completion',
+        'Job Card', 'Bill of Materials', 'Bill of Quantities', 'Engineering Drawing / Template', 'Material Requisition', 'Production / Progress Report',
+        'Labour Timesheet', 'QC Checklist', 'KABM Inspection', 'PDI Report', 'Water Test Report', 'Defect / Snag List',
+        'Purchase Requisition', 'Request for Quotation', 'Purchase Order', 'Goods Received Note', 'Supplier Invoice', 'Stock / Bin Card',
+        'Payment Voucher', 'Petty Cash Voucher', 'Job Costing Sheet', 'Other'];
+    $isAdmin = ($_SESSION['bp_role'] ?? '') === 'admin';
+    ?><!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Documents — Identity Auto Fabricators</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      *{box-sizing:border-box} body{margin:0;font-family:'Inter',system-ui,Arial,sans-serif;background:#f4f6fb;color:#16202e;line-height:1.6}
+      .wrap{max-width:920px;margin:0 auto;padding:0 18px 60px}
+      .top{background:#111111;color:#fff;padding:22px 0}
+      .top .wrap{padding-bottom:0;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
+      .top h1{margin:8px 0 0;font-size:21px} .top .hlogoimg{width:150px;height:auto;display:block}
+      .top a{color:#fff;border:1px solid rgba(255,255,255,.45);padding:7px 12px;border-radius:9px;text-decoration:none;font-size:13px;font-weight:500;display:inline-flex;align-items:center;gap:6px}
+      .navrow{display:flex;gap:8px;flex-wrap:wrap}
+      .card{background:#fff;border:1px solid #e3e8f0;border-radius:16px;box-shadow:0 8px 24px rgba(16,32,55,.06);padding:20px;margin:18px 0}
+      h2{font-size:17px;margin:0 0 4px;display:flex;align-items:center;gap:8px} .lead{color:#5b6b80;font-size:14px;margin:0 0 16px}
+      label.fld{display:block;font-size:12px;font-weight:600;color:#5b6b80;margin:10px 0 5px}
+      select,textarea,input[type=text]{width:100%;font:inherit;font-size:14px;border:1px solid #e3e8f0;border-radius:10px;padding:10px 11px;background:#fff}
+      select:focus,textarea:focus{outline:none;border-color:#1f6feb;box-shadow:0 0 0 3px rgba(31,111,235,.12)}
+      .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:none;border-radius:11px;padding:11px 16px;font:inherit;font-weight:600;font-size:14px;cursor:pointer}
+      .btn.blue{background:#1f6feb;color:#fff} .btn.blue:hover{background:#13427e}
+      .btn.sec{background:#fff;color:#13427e;border:1px solid #cfe0fb} .btn.sec:hover{background:#eef5ff}
+      .btn .lucide{width:17px;height:17px}
+      .pickrow{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+      .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px}
+      .doc{border:1px solid #e3e8f0;border-radius:12px;overflow:hidden;background:#fff;display:flex;flex-direction:column}
+      .thumb{height:120px;background:#f1f4f9;display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;position:relative}
+      .thumb img{width:100%;height:100%;object-fit:cover}
+      .thumb .lucide{width:40px;height:40px;color:#1f6feb}
+      .pdfbadge{position:absolute;bottom:6px;right:6px;background:#b3261e;color:#fff;font-size:10px;font-weight:700;border-radius:5px;padding:2px 6px}
+      .meta{padding:10px 11px;font-size:12px;border-top:1px solid #eef2f8}
+      .meta .type{font-weight:600;font-size:13px;color:#13427e;display:block;margin-bottom:2px}
+      .meta .sub{color:#5b6b80}
+      .docacts{display:flex;gap:6px;padding:0 11px 11px}
+      .mini{flex:1;text-align:center;font-size:12px;font-weight:600;border-radius:8px;padding:6px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:5px}
+      .mini.view{background:#eef5ff;color:#13427e} .mini.del{background:#fbeaea;color:#b3261e;border:none;font:inherit}
+      .mini .lucide{width:13px;height:13px}
+      .empty{text-align:center;color:#5b6b80;padding:26px}
+      .ov{position:fixed;inset:0;background:rgba(8,12,22,.82);display:none;align-items:center;justify-content:center;z-index:50;padding:16px}
+      .ov.show{display:flex} .ov img{max-width:100%;max-height:90vh;border-radius:8px} .ov iframe{width:90vw;height:90vh;border:none;border-radius:8px;background:#fff}
+      .ov .x{position:absolute;top:14px;right:16px;background:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:20px;cursor:pointer}
+      .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:#16202e;color:#fff;padding:11px 20px;border-radius:11px;font-size:14px;opacity:0;transition:.25s;z-index:60}
+      .toast.show{opacity:1;transform:translateX(-50%) translateY(0)} .toast.err{background:#b3261e}
+      .prog{height:6px;background:#eef2f8;border-radius:6px;overflow:hidden;margin-top:12px;display:none} .prog.show{display:block}
+      .prog > div{height:100%;width:0;background:#1f6feb;transition:width .2s}
+    </style></head><body>
+    <div class="top"><div class="wrap">
+      <div><div style="background:#fff;border-radius:10px;padding:6px 10px;display:inline-block"><?= identity_logo('hlogoimg') ?></div><h1>Documents</h1></div>
+      <div class="navrow">
+        <a href="blueprint.php"><i data-lucide="arrow-left"></i> Blueprint</a>
+        <?php if ($isAdmin): ?><a href="blueprint.php?action=logs"><i data-lucide="scroll-text"></i> Logs</a><?php endif; ?>
+      </div>
+    </div></div>
+    <div class="wrap">
+      <div class="card">
+        <h2><i data-lucide="upload"></i> Upload a document</h2>
+        <p class="lead">Add a sample of each document you use — take a photo of a paper copy, or attach a PDF. Pick what it is, then upload.</p>
+        <label class="fld">What is this document?</label>
+        <select id="doctype"><?php foreach ($DOC_TYPES as $t): ?><option><?= h($t) ?></option><?php endforeach; ?></select>
+        <label class="fld">Note (optional)</label>
+        <input type="text" id="note" placeholder="e.g. our current invoice format">
+        <div class="pickrow">
+          <button class="btn blue" id="camBtn" type="button"><i data-lucide="camera"></i> Take a photo</button>
+          <button class="btn sec" id="fileBtn" type="button"><i data-lucide="file-up"></i> Choose PDF or image</button>
+        </div>
+        <div class="prog" id="prog"><div id="progbar"></div></div>
+        <input type="file" id="camInput" accept="image/*" capture="environment" style="display:none">
+        <input type="file" id="fileInput" accept="image/*,application/pdf" style="display:none">
+      </div>
+      <div class="card">
+        <h2><i data-lucide="folder"></i> Uploaded documents (<span id="count"><?= count($docs) ?></span>)</h2>
+        <p class="lead">Tap any document to preview it.</p>
+        <div class="grid" id="grid"></div>
+        <div class="empty" id="empty" style="display:none">No documents yet. Upload your first one above.</div>
+      </div>
+    </div>
+    <div class="ov" id="ov"><button class="x" id="ovx">&times;</button><div id="ovbody"></div></div>
+    <div class="toast" id="toast"></div>
+    <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
+    <script>
+      const CSRF = <?= json_encode($csrf) ?>;
+      let DOCS = <?= json_encode($docs, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '[]' ?>;
+      function icons(){ if(window.lucide) try{ lucide.createIcons(); }catch(e){} }
+      function esc(s){ const d=document.createElement('div'); d.textContent=s==null?'':s; return d.innerHTML; }
+      function isImg(m){ return (m||'').indexOf('image/')===0; }
+      function fileUrl(id,dl){ return 'blueprint.php?action=file&id='+encodeURIComponent(id)+(dl?'&dl=1':''); }
+      function fmtWhen(iso){ const t=Date.parse(iso); if(!t) return ''; const d=new Date(t); return d.toLocaleDateString()+' '+d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}); }
+      function toast(m,e){ const t=document.getElementById('toast'); t.textContent=m; t.classList.toggle('err',!!e); t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2800); }
+
+      function render(){
+        const grid=document.getElementById('grid'), empty=document.getElementById('empty');
+        document.getElementById('count').textContent=DOCS.length;
+        empty.style.display=DOCS.length?'none':'block';
+        grid.innerHTML=DOCS.map(d=>{
+          const thumb = isImg(d.mime)
+            ? '<img loading="lazy" src="'+fileUrl(d.id)+'" alt="">'
+            : '<i data-lucide="file-text"></i><span class="pdfbadge">PDF</span>';
+          return '<div class="doc">'+
+            '<div class="thumb" data-id="'+d.id+'" data-mime="'+esc(d.mime)+'">'+thumb+'</div>'+
+            '<div class="meta"><span class="type">'+esc(d.doctype||'Document')+'</span>'+
+              '<span class="sub">'+esc(d.by||'')+' · '+esc(fmtWhen(d.at))+'</span>'+
+              (d.note?'<div class="sub" style="margin-top:3px">“'+esc(d.note)+'”</div>':'')+'</div>'+
+            '<div class="docacts">'+
+              '<a class="mini view" href="'+fileUrl(d.id)+'" target="_blank"><i data-lucide="external-link"></i> Open</a>'+
+              '<button class="mini del" data-del="'+d.id+'"><i data-lucide="trash-2"></i> Delete</button>'+
+            '</div></div>';
+        }).join('');
+        icons();
+      }
+
+      // preview overlay
+      const ov=document.getElementById('ov'), ovbody=document.getElementById('ovbody');
+      function preview(id,mime){
+        ovbody.innerHTML = isImg(mime) ? '<img src="'+fileUrl(id)+'">' : '<iframe src="'+fileUrl(id)+'"></iframe>';
+        ov.classList.add('show');
+      }
+      ov.addEventListener('click', e=>{ if(e.target===ov||e.target.id==='ovx'){ ov.classList.remove('show'); ovbody.innerHTML=''; } });
+      document.getElementById('ovx').onclick=()=>{ ov.classList.remove('show'); ovbody.innerHTML=''; };
+      document.getElementById('grid').addEventListener('click', e=>{
+        const th=e.target.closest('.thumb'); if(th){ preview(th.getAttribute('data-id'), th.getAttribute('data-mime')); return; }
+        const del=e.target.closest('[data-del]'); if(del){ doDelete(del.getAttribute('data-del')); }
+      });
+
+      // upload
+      const prog=document.getElementById('prog'), progbar=document.getElementById('progbar');
+      function upload(file){
+        if(!file) return;
+        const fd=new FormData();
+        fd.append('csrf',CSRF); fd.append('file',file);
+        fd.append('doctype',document.getElementById('doctype').value);
+        fd.append('note',document.getElementById('note').value);
+        const xhr=new XMLHttpRequest();
+        xhr.open('POST','blueprint.php?action=upload');
+        prog.classList.add('show'); progbar.style.width='0%';
+        xhr.upload.onprogress=ev=>{ if(ev.lengthComputable) progbar.style.width=Math.round(ev.loaded/ev.total*100)+'%'; };
+        xhr.onload=()=>{ prog.classList.remove('show');
+          try{ const j=JSON.parse(xhr.responseText); if(j.ok){ DOCS.unshift(j.doc); render(); toast('Uploaded — thank you!'); document.getElementById('note').value=''; }
+            else toast(j.error||'Upload failed.',true); }catch(e){ toast('Upload failed.',true); } };
+        xhr.onerror=()=>{ prog.classList.remove('show'); toast('Network error during upload.',true); };
+        xhr.send(fd);
+      }
+      const camInput=document.getElementById('camInput'), fileInput=document.getElementById('fileInput');
+      document.getElementById('camBtn').onclick=()=>camInput.click();
+      document.getElementById('fileBtn').onclick=()=>fileInput.click();
+      camInput.onchange=()=>{ if(camInput.files[0]) upload(camInput.files[0]); camInput.value=''; };
+      fileInput.onchange=()=>{ if(fileInput.files[0]) upload(fileInput.files[0]); fileInput.value=''; };
+
+      async function doDelete(id){
+        if(!confirm('Delete this document? This cannot be undone.')) return;
+        try{ const r=await fetch('blueprint.php?action=docdelete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({csrf:CSRF,id})});
+          const j=await r.json(); if(j.ok){ DOCS=DOCS.filter(d=>d.id!==id); render(); toast('Deleted.'); } else toast(j.error||'Could not delete.',true);
+        }catch(e){ toast('Network error.',true); }
+      }
+
+      render(); icons();
+    </script>
+    </body></html><?php
+    exit;
+}
+
 // ---- admin logs view ----
 if ($action === 'logs') {
     if (empty($_SESSION['bp_auth'])) { header('Location: blueprint.php'); exit; }
@@ -506,6 +755,7 @@ if ($action === 'logs') {
 // ---- presence: mark current user online, gather others (for admin) ----
 $presenceOthers = [];
 if ($authed) {
+    bp_protect_dir($DATA_DIR);
     bp_sweep($PRES_FILE, $SESS_FILE);
     bp_touch($PRES_FILE, $_SESSION['bp_user'] ?? '', $_SESSION['bp_name'] ?? '');
     if (($_SESSION['bp_role'] ?? '') === 'admin') $presenceOthers = bp_presence_others($PRES_FILE, $users, $_SESSION['bp_user'] ?? '');
@@ -782,6 +1032,7 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
             </div>
             <a class="logout" href="blueprint.php?action=logs"><i data-lucide="scroll-text"></i> View logs</a>
           <?php endif; ?>
+          <a class="logout" href="blueprint.php?action=docs"><i data-lucide="folder"></i> Documents</a>
           <a class="logout" href="blueprint.php?action=logout"><i data-lucide="log-out"></i> Sign out</a>
         </div>
       </div>

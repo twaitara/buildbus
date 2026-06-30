@@ -6,3 +6,4 @@ deployment:
     - /bin/cp blueprint.php $DEPLOYPATH
     - /bin/cp secret.sample.php $DEPLOYPATH
     - /bin/cp README.md $DEPLOYPATH
+    - /bin/cp .user.ini $DEPLOYPATH
