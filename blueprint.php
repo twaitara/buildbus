@@ -396,7 +396,7 @@ if ($action === 'logs') {
     <style>
       *{box-sizing:border-box} body{margin:0;font-family:'Inter',system-ui,Arial,sans-serif;background:#f4f6fb;color:#16202e;line-height:1.6}
       .wrap{max-width:920px;margin:0 auto;padding:0 18px 60px}
-      .top{background:#1f6feb;color:#fff;padding:26px 0}
+      .top{background:#111111;color:#fff;padding:26px 0}
       .top .wrap{padding-bottom:0;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
       .top h1{margin:0;font-size:22px} .top a{color:#fff;border:1px solid rgba(255,255,255,.45);padding:7px 13px;border-radius:9px;text-decoration:none;font-size:13px;font-weight:500}
       .card{background:#fff;border:1px solid #e3e8f0;border-radius:16px;box-shadow:0 8px 24px rgba(16,32,55,.06);padding:20px;margin:18px 0}
@@ -574,7 +574,7 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
   a{color:var(--accent)}
   .wrap{max-width:880px;margin:0 auto;padding:0 18px 140px}
   /* header */
-  .top{background:#1f6feb;color:#fff;padding:34px 0 30px;margin-bottom:26px}
+  .top{background:#111111;color:#fff;padding:34px 0 30px;margin-bottom:26px}
   .top .wrap{padding-bottom:0}
   .eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;opacity:.82;font-weight:600}
   .top h1{margin:.35rem 0 .5rem;font-size:27px;font-weight:700;letter-spacing:-.01em}
