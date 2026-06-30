@@ -501,7 +501,7 @@ if ($action === 'docs') {
     <style>
       *{box-sizing:border-box} body{margin:0;font-family:'Inter',system-ui,Arial,sans-serif;background:#f4f6fb;color:#16202e;line-height:1.6}
       .wrap{max-width:920px;margin:0 auto;padding:0 18px 60px}
-      .top{background:#111111;color:#fff;padding:22px 0}
+      .top{background:linear-gradient(135deg,#13427e,#1f6feb);color:#fff;padding:22px 0}
       .top .wrap{padding-bottom:0;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
       .top h1{margin:8px 0 0;font-size:21px} .top .hlogoimg{width:150px;height:auto;display:block}
       .top a{color:#fff;border:1px solid rgba(255,255,255,.45);padding:7px 12px;border-radius:9px;text-decoration:none;font-size:13px;font-weight:500;display:inline-flex;align-items:center;gap:6px}
@@ -526,7 +526,7 @@ if ($action === 'docs') {
       .meta .type{font-weight:600;font-size:13px;color:#13427e;display:block;margin-bottom:2px}
       .meta .sub{color:#5b6b80}
       .docacts{display:flex;gap:6px;padding:0 11px 11px}
-      .mini{flex:1;text-align:center;font-size:12px;font-weight:600;border-radius:8px;padding:6px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:5px}
+      .mini{flex:1;text-align:center;font-size:12px;font-weight:600;font-family:inherit;border:none;border-radius:8px;padding:6px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:5px}
       .mini.view{background:#eef5ff;color:#13427e} .mini.del{background:#fbeaea;color:#b3261e;border:none;font:inherit}
       .mini .lucide{width:13px;height:13px}
       .empty{text-align:center;color:#5b6b80;padding:26px}
@@ -596,7 +596,7 @@ if ($action === 'docs') {
               '<span class="sub">'+esc(d.by||'')+' · '+esc(fmtWhen(d.at))+' · '+esc(fmtSize(d.size))+'</span>'+
               (d.note?'<div class="sub" style="margin-top:3px">“'+esc(d.note)+'”</div>':'')+'</div>'+
             '<div class="docacts">'+
-              '<a class="mini view" href="'+fileUrl(d.id)+'" target="_blank"><i data-lucide="external-link"></i> Open</a>'+
+              '<button class="mini view" data-view="'+d.id+'" data-mime="'+esc(d.mime)+'"><i data-lucide="eye"></i> View</button>'+
               '<button class="mini del" data-del="'+d.id+'"><i data-lucide="trash-2"></i> Delete</button>'+
             '</div></div>';
         }).join('');
@@ -613,6 +613,7 @@ if ($action === 'docs') {
       document.getElementById('ovx').onclick=()=>{ ov.classList.remove('show'); ovbody.innerHTML=''; };
       document.getElementById('grid').addEventListener('click', e=>{
         const th=e.target.closest('.thumb'); if(th){ preview(th.getAttribute('data-id'), th.getAttribute('data-mime')); return; }
+        const v=e.target.closest('[data-view]'); if(v){ preview(v.getAttribute('data-view'), v.getAttribute('data-mime')); return; }
         const del=e.target.closest('[data-del]'); if(del){ doDelete(del.getAttribute('data-del')); }
       });
 
@@ -692,7 +693,7 @@ if ($action === 'logs') {
     <style>
       *{box-sizing:border-box} body{margin:0;font-family:'Inter',system-ui,Arial,sans-serif;background:#f4f6fb;color:#16202e;line-height:1.6}
       .wrap{max-width:920px;margin:0 auto;padding:0 18px 60px}
-      .top{background:#111111;color:#fff;padding:26px 0}
+      .top{background:linear-gradient(135deg,#13427e,#1f6feb);color:#fff;padding:26px 0}
       .top .wrap{padding-bottom:0;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
       .top h1{margin:0;font-size:22px} .top a{color:#fff;border:1px solid rgba(255,255,255,.45);padding:7px 13px;border-radius:9px;text-decoration:none;font-size:13px;font-weight:500}
       .card{background:#fff;border:1px solid #e3e8f0;border-radius:16px;box-shadow:0 8px 24px rgba(16,32,55,.06);padding:20px;margin:18px 0}
@@ -871,7 +872,7 @@ function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
   a{color:var(--accent)}
   .wrap{max-width:880px;margin:0 auto;padding:0 18px 140px}
   /* header */
-  .top{background:#111111;color:#fff;padding:34px 0 30px;margin-bottom:26px}
+  .top{background:linear-gradient(135deg,#13427e,#1f6feb);color:#fff;padding:34px 0 30px;margin-bottom:26px}
   .top .wrap{padding-bottom:0}
   .eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;opacity:.82;font-weight:600}
   .top h1{margin:.35rem 0 .5rem;font-size:27px;font-weight:700;letter-spacing:-.01em}
