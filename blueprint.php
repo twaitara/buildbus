@@ -47,6 +47,43 @@ function bp_protect_dir($dir) {
     if (!is_file($ht)) @file_put_contents($ht, "<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\nOrder allow,deny\nDeny from all\n</IfModule>\n");
 }
 
+/**
+ * Optimize an uploaded image with GD: auto-rotate (JPEG EXIF), downscale to
+ * $maxDim, strip metadata, re-encode at high quality. Returns
+ * ['path','mime','ext'] for a temp file, or null if it can't / shouldn't.
+ */
+function bp_optimize_image($src, $mime, $maxDim = 2200, $quality = 85) {
+    if (!function_exists('imagecreatetruecolor')) return null; // GD missing
+    $info = @getimagesize($src);
+    if ($info && ($info[0] * $info[1]) > 40000000) return null;  // >40MP: skip to avoid OOM
+    switch ($mime) {
+        case 'image/jpeg': $img = @imagecreatefromjpeg($src); $ext = 'jpg';  $om = 'image/jpeg'; break;
+        case 'image/png':  $img = @imagecreatefrompng($src);  $ext = 'png';  $om = 'image/png';  break;
+        case 'image/webp': $img = function_exists('imagecreatefromwebp') ? @imagecreatefromwebp($src) : null; $ext = 'webp'; $om = 'image/webp'; break;
+        default: return null; // heic/gif/pdf: leave as-is
+    }
+    if (!$img) return null;
+    if ($mime === 'image/jpeg' && function_exists('exif_read_data')) {
+        $o = @exif_read_data($src)['Orientation'] ?? 0; $deg = ($o == 3) ? 180 : (($o == 6) ? -90 : (($o == 8) ? 90 : 0));
+        if ($deg) { $r = @imagerotate($img, $deg, 0); if ($r) { imagedestroy($img); $img = $r; } }
+    }
+    $w = imagesx($img); $h = imagesy($img); $scale = min(1, $maxDim / max($w, $h));
+    if ($scale < 1) {
+        $nw = max(1, (int)round($w * $scale)); $nh = max(1, (int)round($h * $scale));
+        $dst = imagecreatetruecolor($nw, $nh);
+        if ($om === 'image/png') { imagealphablending($dst, false); imagesavealpha($dst, true); imagefilledrectangle($dst, 0, 0, $nw, $nh, imagecolorallocatealpha($dst, 0, 0, 0, 127)); }
+        imagecopyresampled($dst, $img, 0, 0, 0, 0, $nw, $nh, $w, $h);
+        imagedestroy($img); $img = $dst;
+    } elseif ($om === 'image/png') { imagealphablending($img, false); imagesavealpha($img, true); }
+    $out = tempnam(sys_get_temp_dir(), 'bpimg'); $ok = false;
+    if ($om === 'image/jpeg') { imageinterlace($img, true); $ok = imagejpeg($img, $out, $quality); }
+    elseif ($om === 'image/png') $ok = imagepng($img, $out, 9);
+    elseif ($om === 'image/webp') $ok = imagewebp($img, $out, $quality);
+    imagedestroy($img);
+    if (!$ok) { @unlink($out); return null; }
+    return ['path' => $out, 'mime' => $om, 'ext' => $ext];
+}
+
 /** Read/update the presence map (username => last-seen unix time). */
 function bp_presence_read($file) { $p = is_file($file) ? json_decode(file_get_contents($file), true) : []; return is_array($p) ? $p : []; }
 function bp_touch($file, $user, $name = '') {
@@ -382,13 +419,22 @@ if ($action === 'upload') {
     $mime = function_exists('finfo_open') ? finfo_file(finfo_open(FILEINFO_MIME_TYPE), $tmp) : ($_FILES['file']['type'] ?? '');
     $allowed = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp', 'image/gif' => 'gif', 'image/heic' => 'heic', 'application/pdf' => 'pdf'];
     if (!isset($allowed[$mime])) { echo json_encode(['ok' => false, 'error' => 'Only photos (JPG, PNG) and PDF files are allowed.']); exit; }
+    if (!is_uploaded_file($tmp)) { echo json_encode(['ok' => false, 'error' => 'Upload error.']); exit; }
     bp_protect_dir($DATA_DIR); bp_protect_dir($UP_DIR);
     $id = bin2hex(random_bytes(8));
-    $stored = $id . '.' . $allowed[$mime];
-    if (!move_uploaded_file($tmp, $UP_DIR . '/' . $stored)) { echo json_encode(['ok' => false, 'error' => 'Could not save the file. Try again.']); exit; }
+    $opt = bp_optimize_image($tmp, $mime);
+    if ($opt) {
+        $stored = $id . '.' . $opt['ext'];
+        if (!@rename($opt['path'], $UP_DIR . '/' . $stored)) { @copy($opt['path'], $UP_DIR . '/' . $stored); @unlink($opt['path']); }
+        $mime = $opt['mime'];
+    } else {
+        $stored = $id . '.' . $allowed[$mime];
+        if (!move_uploaded_file($tmp, $UP_DIR . '/' . $stored)) { echo json_encode(['ok' => false, 'error' => 'Could not save the file. Try again.']); exit; }
+    }
+    $finalSize = @filesize($UP_DIR . '/' . $stored) ?: $size;
     $rec = ['id' => $id, 'file' => $stored, 'name' => mb_substr((string)($_FILES['file']['name'] ?? 'file'), 0, 140),
             'doctype' => mb_substr((string)($_POST['doctype'] ?? 'Other'), 0, 80), 'note' => mb_substr(trim((string)($_POST['note'] ?? '')), 0, 300),
-            'mime' => $mime, 'size' => $size, 'by' => $_SESSION['bp_name'] ?? '', 'user' => $_SESSION['bp_user'] ?? '', 'at' => date('c')];
+            'mime' => $mime, 'size' => $finalSize, 'orig_size' => $size, 'by' => $_SESSION['bp_name'] ?? '', 'user' => $_SESSION['bp_user'] ?? '', 'at' => date('c')];
     bp_log($DOC_FILE, $rec);
     bp_log($ACT_FILE, ['at' => date('c'), 'user' => $_SESSION['bp_user'] ?? '', 'name' => $_SESSION['bp_name'] ?? '', 'action' => 'upload', 'ip' => bp_ip(), 'doctype' => $rec['doctype']]);
     echo json_encode(['ok' => true, 'doc' => $rec]); exit;
@@ -533,6 +579,7 @@ if ($action === 'docs') {
       function isImg(m){ return (m||'').indexOf('image/')===0; }
       function fileUrl(id,dl){ return 'blueprint.php?action=file&id='+encodeURIComponent(id)+(dl?'&dl=1':''); }
       function fmtWhen(iso){ const t=Date.parse(iso); if(!t) return ''; const d=new Date(t); return d.toLocaleDateString()+' '+d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}); }
+      function fmtSize(b){ b=+b||0; if(b<1024) return b+' B'; if(b<1048576) return Math.round(b/1024)+' KB'; return (b/1048576).toFixed(1)+' MB'; }
       function toast(m,e){ const t=document.getElementById('toast'); t.textContent=m; t.classList.toggle('err',!!e); t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2800); }
 
       function render(){
@@ -546,7 +593,7 @@ if ($action === 'docs') {
           return '<div class="doc">'+
             '<div class="thumb" data-id="'+d.id+'" data-mime="'+esc(d.mime)+'">'+thumb+'</div>'+
             '<div class="meta"><span class="type">'+esc(d.doctype||'Document')+'</span>'+
-              '<span class="sub">'+esc(d.by||'')+' · '+esc(fmtWhen(d.at))+'</span>'+
+              '<span class="sub">'+esc(d.by||'')+' · '+esc(fmtWhen(d.at))+' · '+esc(fmtSize(d.size))+'</span>'+
               (d.note?'<div class="sub" style="margin-top:3px">“'+esc(d.note)+'”</div>':'')+'</div>'+
             '<div class="docacts">'+
               '<a class="mini view" href="'+fileUrl(d.id)+'" target="_blank"><i data-lucide="external-link"></i> Open</a>'+
